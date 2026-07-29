@@ -80,4 +80,77 @@ describe("POST /api/manual", () => {
       expect.objectContaining({ seriesId: null }),
     );
   });
+
+  it("generates a stable externalId from the normalized title for deduplication", async () => {
+    persistResolvedBook.mockClear();
+    const res1 = await post({ title: "The Winds of Winter" });
+    expect(res1.status).toBe(201);
+
+    const externalId1 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    persistResolvedBook.mockClear();
+    const res2 = await post({ title: "The Winds of Winter" });
+    expect(res2.status).toBe(201);
+
+    const externalId2 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    expect(externalId1).toBe(externalId2);
+    expect(externalId1).toMatch(/^manual:/);
+  });
+
+  it("produces the same externalId for titles differing only in whitespace", async () => {
+    persistResolvedBook.mockClear();
+    const res1 = await post({ title: "  The   Winds    of   Winter  " });
+    expect(res1.status).toBe(201);
+
+    const externalId1 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    persistResolvedBook.mockClear();
+    const res2 = await post({ title: "the winds of winter" });
+    expect(res2.status).toBe(201);
+
+    const externalId2 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    expect(externalId1).toBe(externalId2);
+  });
+
+  it("includes the author in externalId to distinguish books with the same title", async () => {
+    persistResolvedBook.mockClear();
+    const res1 = await post({ title: "The Title", author: "Author A" });
+    expect(res1.status).toBe(201);
+
+    const externalId1 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    persistResolvedBook.mockClear();
+    const res2 = await post({ title: "The Title", author: "Author B" });
+    expect(res2.status).toBe(201);
+
+    const externalId2 = (
+      persistResolvedBook.mock.calls[0][0] as unknown as {
+        sources: { externalId: string }[];
+      }
+    ).sources[0].externalId;
+
+    expect(externalId1).not.toBe(externalId2);
+  });
 });

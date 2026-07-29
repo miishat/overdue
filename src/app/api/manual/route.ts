@@ -10,6 +10,14 @@ interface ManualRequest {
   sourceUrl?: string;
 }
 
+// Normalize a string for use in deduplication keys. Trims, lowercases, and
+// collapses internal whitespace. Stability is critical: this derivation is
+// used to compute externalId, which the dedup path in persistResolvedBook
+// depends on to recognize duplicate submissions.
+function normalizeKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 export async function POST(request: Request): Promise<Response> {
   const userId = await getCurrentUserId();
 
@@ -21,8 +29,20 @@ export async function POST(request: Request): Promise<Response> {
 
   const author = body.author?.trim();
 
+  // Generate a stable identifier from the normalized title and author.
+  // The author is included if provided to distinguish books with the same
+  // title by different authors. Both are normalized to collapse whitespace
+  // for stability across submissions.
+  const normalizedTitle = normalizeKey(title);
+  const normalizedAuthor = author ? normalizeKey(author) : "";
+  const externalIdParts = [normalizedTitle];
+  if (normalizedAuthor) {
+    externalIdParts.push(normalizedAuthor);
+  }
+  const stableExternalId = `manual:${externalIdParts.join(":")}`;
+
   const book: ResolvedBook = {
-    key: `manual:${title.toLowerCase()}`,
+    key: `manual:${normalizedTitle}`,
     title,
     authors: author ? [author] : [],
     description: body.notes?.trim() || undefined,
@@ -30,7 +50,7 @@ export async function POST(request: Request): Promise<Response> {
     sources: [
       {
         provider: "manual",
-        externalId: `manual:${Date.now()}`,
+        externalId: stableExternalId,
         sourceUrl: body.sourceUrl?.trim() || undefined,
       },
     ],

@@ -107,22 +107,62 @@ describe("SearchBox", () => {
   });
 
   it("does not show the manual entry form when results are present", async () => {
-    const book = makeBook();
-    fetchMock.mockResolvedValue(jsonResponse({ results: [book] }));
+    fetchMock.mockResolvedValue(jsonResponse({ results: [] }));
     render(<SearchBox onSelect={vi.fn()} />);
     const input = screen.getByLabelText("Search for a book or author");
 
+    // First, verify the form shows when there are no results
+    fireEvent.change(input, { target: { value: "zzznotfound" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(
+      screen.getByLabelText("Title", { selector: "input" }),
+    ).toBeTruthy();
+
+    // Now change the mock to return results
+    const book = makeBook();
+    fetchMock.mockResolvedValue(jsonResponse({ results: [book] }));
+
+    // Trigger a new search with results
     fireEvent.change(input, { target: { value: "fellowship" } });
     act(() => {
       vi.advanceTimersByTime(500);
     });
     await flush();
 
+    // The form should be gone now
     expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
   });
 
-  it("does not show the manual entry form before a query settles", () => {
+  it("does not show the manual entry form before a query settles", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ results: [] }));
     render(<SearchBox onSelect={vi.fn()} />);
+
+    // Initially (before any query), the form should not be visible
+    expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
+
+    // After a query settles with no results, the form should appear
+    const input = screen.getByLabelText("Search for a book or author");
+    fireEvent.change(input, { target: { value: "zzznotfound" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(
+      screen.getByLabelText("Title", { selector: "input" }),
+    ).toBeTruthy();
+
+    // When we clear the input (making query too short), the form should disappear
+    fireEvent.change(input, { target: { value: "" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+    // The form disappears when the debounced query becomes too short
     expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
   });
 
