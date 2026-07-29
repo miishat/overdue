@@ -19,8 +19,10 @@ export function proxy(request: NextRequest) {
     case "unlock": {
       // evaluateGate only returns "unlock" when secret is a defined,
       // non-empty string, so this narrows safely without a type assertion.
+      // This branch is unreachable today, but this file's entire job is
+      // denial, so the unreachable default denies rather than admits.
       if (!secret) {
-        return NextResponse.next();
+        return denyResponse();
       }
 
       const redirectUrl = new URL(request.nextUrl);
@@ -38,11 +40,18 @@ export function proxy(request: NextRequest) {
     }
 
     case "deny":
-      return new NextResponse("Not available.", {
-        status: 401,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+      return denyResponse();
   }
+}
+
+function denyResponse(): NextResponse {
+  return new NextResponse("Not available.", {
+    status: 401,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
 export const config = {
