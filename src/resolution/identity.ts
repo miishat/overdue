@@ -26,20 +26,37 @@ function identityKey(book: ProviderBook): string {
 
 export function groupByIdentity(books: ProviderBook[]): IdentityGroup[] {
   const byKey = new Map<string, ProviderBook[]>();
-  const isbnByTitleAuthor = new Map<string, string>();
+  const isbnByTitleAuthor = new Map<string, Set<string>>();
 
   for (const book of books) {
     if (book.isbn13) {
-      isbnByTitleAuthor.set(
-        `ta:${normaliseTitle(book.title)}|${normaliseAuthor(book.authors[0])}`,
-        `isbn:${book.isbn13}`,
-      );
+      const taKey = `ta:${normaliseTitle(book.title)}|${normaliseAuthor(book.authors[0])}`;
+      const isbnKey = `isbn:${book.isbn13}`;
+      const existing = isbnByTitleAuthor.get(taKey);
+      if (existing) {
+        existing.add(isbnKey);
+      } else {
+        isbnByTitleAuthor.set(taKey, new Set([isbnKey]));
+      }
     }
   }
 
   for (const book of books) {
     const raw = identityKey(book);
-    const key = raw.startsWith("ta:") ? (isbnByTitleAuthor.get(raw) ?? raw) : raw;
+    let key = raw;
+    if (raw.startsWith("ta:")) {
+      const candidates = isbnByTitleAuthor.get(raw);
+      // If exactly one ISBN is seen under this title-author key, an ISBN-less
+      // record can safely join it. If more than one distinct ISBN shares the
+      // same title and author, we genuinely do not know which book the
+      // ISBN-less record belongs to, so we deliberately do not guess and
+      // leave it grouped under its own title-author key instead. Task 13's
+      // trust matrix and confidence scoring are designed to cope with that
+      // visible ambiguity rather than a silent wrong answer.
+      if (candidates && candidates.size === 1) {
+        key = [...candidates][0];
+      }
+    }
     const existing = byKey.get(key);
     if (existing) {
       existing.push(book);

@@ -114,5 +114,66 @@ describe("groupByIdentity", () => {
     expect(forward).toHaveLength(1);
     expect(reversed).toHaveLength(1);
     expect(forward.length).toBe(reversed.length);
+
+    const membership = (groups: ReturnType<typeof groupByIdentity>) =>
+      groups
+        .map((g) => g.records.map((r) => r.externalId).sort())
+        .sort((x, y) => x.join(",").localeCompare(y.join(",")));
+
+    expect(membership(forward)).toEqual(membership(reversed));
+  });
+
+  it("does not guess which ISBN group an orphan belongs to when two records share title and author but carry different ISBNs", () => {
+    const a = book({
+      provider: "google",
+      externalId: "a1",
+      title: "T",
+      authors: ["X"],
+      isbn13: "1111111111111",
+    });
+    const b = book({
+      provider: "hardcover",
+      externalId: "b1",
+      title: "T",
+      authors: ["X"],
+      isbn13: "2222222222222",
+    });
+    const c = book({
+      provider: "wikidata",
+      externalId: "c1",
+      title: "T",
+      authors: ["X"],
+    });
+
+    const forward = groupByIdentity([a, b, c]);
+    const reversed = groupByIdentity([c, b, a]);
+
+    const membership = (groups: ReturnType<typeof groupByIdentity>) =>
+      groups
+        .map((g) => g.records.map((r) => r.externalId).sort())
+        .sort((x, y) => x.join(",").localeCompare(y.join(",")));
+
+    expect(membership(forward)).toEqual(membership(reversed));
+  });
+
+  it("joins an ISBN-less record to the group when there is exactly one candidate ISBN for its title and author", () => {
+    const withIsbn = book({
+      provider: "google",
+      externalId: "g1",
+      title: "Unique Title",
+      authors: ["Sole Author"],
+      isbn13: "3333333333333",
+    });
+    const orphan = book({
+      provider: "hardcover",
+      externalId: "h1",
+      title: "Unique Title",
+      authors: ["Sole Author"],
+    });
+
+    const groups = groupByIdentity([withIsbn, orphan]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].records.map((r) => r.externalId).sort()).toEqual(["g1", "h1"]);
   });
 });
