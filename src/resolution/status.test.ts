@@ -111,4 +111,84 @@ describe("deriveStatus", () => {
       ),
     ).toBe("ANNOUNCED");
   });
+
+  // Calendar-exact years without leap day: 2097-03-01 to 2100-03-01 has no Feb 29
+  // (2100 is not a leap year: divisible by 100 but not by 400).
+  // This span is exactly 3 years (365*3 = 1095 days), but the 365.25 approximation
+  // computes 1095/365.25 = 2.9993 years, causing it to return EXPECTED instead of HIATUS.
+  it("no leap day: 3-year span with 0 leap days, exactly on anniversary", () => {
+    const releaseDate = new Date("2097-03-01T00:00:00Z");
+    expect(
+      deriveStatus(
+        input({
+          hasBookRecord: false,
+          lastSeriesReleaseAt: releaseDate,
+          hiatusThresholdYears: 3,
+          now: new Date("2100-03-01T00:00:00Z"),
+        }),
+      ),
+    ).toBe("HIATUS");
+  });
+
+  // Boundary: inclusive test. One day before the anniversary should return EXPECTED,
+  // the anniversary itself should return HIATUS.
+  it("boundary: one day before 4-year anniversary returns EXPECTED", () => {
+    const releaseDate = new Date("2022-07-28T00:00:00Z");
+    expect(
+      deriveStatus(
+        input({
+          hasBookRecord: false,
+          lastSeriesReleaseAt: releaseDate,
+          hiatusThresholdYears: 4,
+          now: new Date("2026-07-27T00:00:00Z"),
+        }),
+      ),
+    ).toBe("EXPECTED");
+  });
+
+  it("boundary: 4-year anniversary itself returns HIATUS", () => {
+    const releaseDate = new Date("2022-07-28T00:00:00Z");
+    expect(
+      deriveStatus(
+        input({
+          hasBookRecord: false,
+          lastSeriesReleaseAt: releaseDate,
+          hiatusThresholdYears: 4,
+          now: new Date("2026-07-28T00:00:00Z"),
+        }),
+      ),
+    ).toBe("HIATUS");
+  });
+
+  // February 29 edge case: adding a year to Feb 29 in a leap year where the target year
+  // is not a leap year (e.g., 2024-02-29 + 2 years = 2026-02-29, which doesn't exist).
+  // JavaScript's setFullYear rolls this to March 1, 2026. The anniversary date should
+  // be treated as March 1, 2026, so if now >= 2026-03-01, the threshold is met.
+  it("February 29 start: one day before anniversary (Feb 28) returns EXPECTED", () => {
+    const releaseDate = new Date("2024-02-29T00:00:00Z");
+    expect(
+      deriveStatus(
+        input({
+          hasBookRecord: false,
+          lastSeriesReleaseAt: releaseDate,
+          hiatusThresholdYears: 2,
+          now: new Date("2026-02-28T00:00:00Z"),
+        }),
+      ),
+    ).toBe("EXPECTED");
+  });
+
+  it("February 29 start: anniversary (rolled to March 1) returns HIATUS", () => {
+    const releaseDate = new Date("2024-02-29T00:00:00Z");
+    expect(
+      deriveStatus(
+        input({
+          hasBookRecord: false,
+          lastSeriesReleaseAt: releaseDate,
+          hiatusThresholdYears: 2,
+          now: new Date("2026-03-01T00:00:00Z"),
+        }),
+      ),
+    ).toBe("HIATUS");
+  });
 });

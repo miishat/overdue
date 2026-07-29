@@ -15,8 +15,6 @@ export interface StatusInput {
   hiatusThresholdYears: number;
 }
 
-const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
-
 function isSameOrBefore(a: Date, b: Date): boolean {
   return a.getTime() <= b.getTime();
 }
@@ -44,8 +42,15 @@ export function deriveStatus(input: StatusInput): ReleaseStatus {
   // 7 and 8. No record at all, so the series itself decides.
   if (!input.lastSeriesReleaseAt) return "EXPECTED";
 
-  const elapsedYears =
-    (input.now.getTime() - input.lastSeriesReleaseAt.getTime()) / MS_PER_YEAR;
+  // Calculate the anniversary date by adding years to the release date's year component.
+  // For example, a release on 2024-02-29 + 2 years becomes 2026-02-29, which doesn't exist,
+  // so JavaScript's setUTCFullYear rolls it to 2026-03-01. The anniversary is treated as this
+  // rolled date, making the boundary check calendar-exact rather than approximated by 365.25 days.
+  // We use UTC methods throughout to ensure a machine's local timezone cannot affect the result.
+  const anniversaryDate = new Date(input.lastSeriesReleaseAt);
+  anniversaryDate.setUTCFullYear(
+    input.lastSeriesReleaseAt.getUTCFullYear() + input.hiatusThresholdYears,
+  );
 
-  return elapsedYears >= input.hiatusThresholdYears ? "HIATUS" : "EXPECTED";
+  return isSameOrBefore(anniversaryDate, input.now) ? "HIATUS" : "EXPECTED";
 }
