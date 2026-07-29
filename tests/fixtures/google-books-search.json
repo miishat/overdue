@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "id": "gbs-1",
+      "volumeInfo": {
+        "title": "The Way of Kings",
+        "authors": ["Brandon Sanderson"],
+        "publishedDate": "2010-08-31",
+        "description": "Book one.",
+        "imageLinks": { "thumbnail": "http://books.google.com/cover1" },
+        "industryIdentifiers": [
+          { "type": "ISBN_13", "identifier": "9780765326355" }
+        ]
+      }
+    },
+    {
+      "id": "gbs-2",
+      "volumeInfo": {
+        "title": "Untitled Sequel",
+        "authors": ["Brandon Sanderson"],
+        "publishedDate": "2027"
+      }
+    }
+  ]
+}

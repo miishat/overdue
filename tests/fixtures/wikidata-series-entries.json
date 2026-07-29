@@ -1,0 +1,20 @@
+{
+  "results": {
+    "bindings": [
+      {
+        "book": { "value": "http://www.wikidata.org/entity/Q1234" },
+        "bookLabel": { "value": "A Dance with Dragons" },
+        "ordinal": { "value": "5" },
+        "pubDate": { "value": "2011-07-12T00:00:00Z" },
+        "precision": { "value": "11" },
+        "seriesLabel": { "value": "A Song of Ice and Fire" }
+      },
+      {
+        "book": { "value": "http://www.wikidata.org/entity/Q5678" },
+        "bookLabel": { "value": "The Winds of Winter" },
+        "ordinal": { "value": "6" },
+        "seriesLabel": { "value": "A Song of Ice and Fire" }
+      }
+    ]
+  }
+}
