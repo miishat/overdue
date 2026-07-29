@@ -45,4 +45,18 @@ describe("googleBooksProvider", () => {
     await expect(googleBooksProvider.getSeries("anything")).resolves.toBeNull();
     await expect(googleBooksProvider.getSeriesEntries("anything")).resolves.toEqual([]);
   });
+
+  it("returns an empty array when items is not an array", async () => {
+    server.use(http.get(ENDPOINT, () => HttpResponse.json({ items: { not: "an array" } })));
+    await expect(googleBooksProvider.searchBooks("anything")).resolves.toEqual([]);
+  });
+
+  it("drops a volume missing volumeInfo without throwing", async () => {
+    server.use(
+      http.get(ENDPOINT, () =>
+        HttpResponse.json({ items: [{ id: "no-info" }, ...fixture.items] }),
+      ),
+    );
+    await expect(googleBooksProvider.searchBooks("anything")).resolves.toHaveLength(2);
+  });
 });

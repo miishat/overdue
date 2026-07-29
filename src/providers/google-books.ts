@@ -1,20 +1,9 @@
 import type { DatePrecision } from "@/db/schema/enums";
 import type { MetadataProvider, ProviderBook } from "./types";
 import { normaliseIsbn13 } from "./types";
+import { asArray, asRecord, asString, fetchJson } from "./http";
 
 const ENDPOINT = "https://www.googleapis.com/books/v1/volumes";
-
-interface GoogleVolume {
-  id: string;
-  volumeInfo?: {
-    title?: string;
-    authors?: string[];
-    publishedDate?: string;
-    description?: string;
-    imageLinks?: { thumbnail?: string };
-    industryIdentifiers?: { type: string; identifier: string }[];
-  };
-}
 
 export function parsePublishedDate(
   raw: string | undefined,
@@ -26,26 +15,39 @@ export function parsePublishedDate(
   return null;
 }
 
-function toProviderBook(volume: GoogleVolume): ProviderBook | null {
-  const info = volume.volumeInfo;
-  if (!info?.title) return null;
+function toProviderBook(volumeValue: unknown): ProviderBook | null {
+  const volume = asRecord(volumeValue);
+  if (!volume) return null;
 
-  const parsed = parsePublishedDate(info.publishedDate);
-  const isbnRaw = info.industryIdentifiers?.find(
-    (i) => i.type === "ISBN_13",
-  )?.identifier;
+  const id = asString(volume.id);
+  const info = asRecord(volume.volumeInfo);
+  const title = info ? asString(info.title) : undefined;
+  if (!id || !info || !title) return null;
+
+  const authors = info ? asArray(info.authors).filter((a): a is string => typeof a === "string") : [];
+  const publishedDate = asString(info.publishedDate);
+  const parsed = parsePublishedDate(publishedDate);
+
+  const identifiers = asArray(info.industryIdentifiers)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+  const isbnRaw = identifiers.find((entry) => asString(entry.type) === "ISBN_13");
+  const isbnString = isbnRaw ? asString(isbnRaw.identifier) : undefined;
+
+  const imageLinks = asRecord(info.imageLinks);
+  const thumbnail = imageLinks ? asString(imageLinks.thumbnail) : undefined;
 
   return {
     provider: "google",
-    externalId: volume.id,
-    title: info.title,
-    authors: info.authors ?? [],
-    isbn13: isbnRaw ? (normaliseIsbn13(isbnRaw) ?? undefined) : undefined,
-    coverUrl: info.imageLinks?.thumbnail?.replace(/^http:/, "https:"),
-    description: info.description,
+    externalId: id,
+    title,
+    authors,
+    isbn13: isbnString ? (normaliseIsbn13(isbnString) ?? undefined) : undefined,
+    coverUrl: thumbnail?.replace(/^http:/, "https:"),
+    description: asString(info.description),
     releaseDate: parsed?.date,
     datePrecision: parsed?.precision,
-    sourceUrl: `https://books.google.com/books?id=${volume.id}`,
+    sourceUrl: `https://books.google.com/books?id=${id}`,
   };
 }
 
@@ -55,18 +57,17 @@ export const googleBooksProvider: MetadataProvider = {
 
   async searchBooks(query, signal) {
     const url = `${ENDPOINT}?q=${encodeURIComponent(query)}&maxResults=20`;
-    const res = await fetch(url, { signal });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { items?: GoogleVolume[] };
-    return (data.items ?? [])
+    const data = await fetchJson(url, { signal });
+    const record = asRecord(data);
+    if (!record) return [];
+    return asArray(record.items)
       .map(toProviderBook)
       .filter((b): b is ProviderBook => b !== null);
   },
 
   async getBook(externalId, signal) {
-    const res = await fetch(`${ENDPOINT}/${externalId}`, { signal });
-    if (!res.ok) return null;
-    return toProviderBook((await res.json()) as GoogleVolume);
+    const data = await fetchJson(`${ENDPOINT}/${externalId}`, { signal });
+    return toProviderBook(data);
   },
 
   async getSeries() {
