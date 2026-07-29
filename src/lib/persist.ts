@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import type { ProviderName } from "@/db/schema/enums";
 import { authors, bookAuthors, books, series } from "@/db/schema/catalog";
@@ -117,8 +117,41 @@ export function externalIdRows(
   return rows;
 }
 
+// external_ids is the designed home for provider->entity mapping. Reusing
+// it here to detect an already-catalogued book means a second sighting
+// enriches the record instead of creating a duplicate book/release chain.
+async function findExistingBookId(
+  sources: ResolvedBook["sources"],
+): Promise<string | null> {
+  if (sources.length === 0) return null;
+
+  const matches = sources.map((source) =>
+    and(
+      eq(externalIds.provider, source.provider),
+      eq(externalIds.externalId, source.externalId),
+    ),
+  );
+
+  const existing = await db
+    .select({ entityId: externalIds.entityId })
+    .from(externalIds)
+    .where(and(eq(externalIds.entityType, "book"), or(...matches)))
+    .limit(1);
+
+  return existing[0]?.entityId ?? null;
+}
+
 async function upsertSeries(book: ResolvedBook): Promise<string | null> {
   if (!book.seriesName) return null;
+
+  // Insert first and rely on the unique constraint on series.title to
+  // absorb a concurrent insert of the same title, then re-select for the
+  // id whichever path won. This avoids the select-then-insert race that a
+  // plain existence check has.
+  await db
+    .insert(series)
+    .values({ title: book.seriesName, status: "ongoing" })
+    .onConflictDoNothing();
 
   const existing = await db
     .select({ id: series.id })
@@ -126,14 +159,7 @@ async function upsertSeries(book: ResolvedBook): Promise<string | null> {
     .where(eq(series.title, book.seriesName))
     .limit(1);
 
-  if (existing[0]) return existing[0].id;
-
-  const inserted = await db
-    .insert(series)
-    .values({ title: book.seriesName, status: "ongoing" })
-    .returning({ id: series.id });
-
-  return inserted[0].id;
+  return existing[0]?.id ?? null;
 }
 
 export async function persistResolvedBook(
@@ -141,19 +167,23 @@ export async function persistResolvedBook(
 ): Promise<{ bookId: string; seriesId: string | null }> {
   const seriesId = await upsertSeries(book);
 
-  const inserted = await db
-    .insert(books)
-    .values({
-      title: book.title,
-      seriesId,
-      seriesPosition: book.seriesPosition?.toString(),
-      isbn13: book.isbn13,
-      coverUrl: book.coverUrl,
-      description: book.description,
-    })
-    .returning({ id: books.id });
+  const existingBookId = await findExistingBookId(book.sources);
 
-  const bookId = inserted[0].id;
+  const bookId =
+    existingBookId ??
+    (
+      await db
+        .insert(books)
+        .values({
+          title: book.title,
+          seriesId,
+          seriesPosition: book.seriesPosition?.toString(),
+          isbn13: book.isbn13,
+          coverUrl: book.coverUrl,
+          description: book.description,
+        })
+        .returning({ id: books.id })
+    )[0].id;
 
   await upsertAuthors(bookId, book.authors);
 

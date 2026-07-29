@@ -87,6 +87,45 @@ describe("authorRows", () => {
   });
 });
 
+describe("persistResolvedBook dedup", () => {
+  it("reuses the existing book id on a second persist of the same ResolvedBook instead of inserting a duplicate", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = { bookInsertCount: 0, externalIdRows: [] as { entityId: string }[] };
+    vi.doMock("@/db/client", () => ({
+      db: makeStatefulDbMock({ books, releases, series, externalIds }, state),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const book = {
+      key: "isbn:dup",
+      title: "Some Book",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-99" }],
+      confidence: 90,
+    };
+
+    const first = await persistResolvedBook(book);
+    const second = await persistResolvedBook(book);
+
+    expect(state.bookInsertCount).toBe(1);
+    expect(second.bookId).toBe(first.bookId);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+});
+
 describe("persistResolvedBook status derivation", () => {
   it("computes sourceOfficial from provenance.releaseDate being hardcover, wikidata, or manual", async () => {
     vi.resetModules();
@@ -186,6 +225,62 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
           return [{ id: "row-1" }];
         },
         onConflictDoNothing: async () => undefined,
+      }),
+    };
+  };
+
+  return { select, insert };
+}
+
+// A stateful mock that tracks how many times `books` was inserted and
+// remembers external_ids rows across calls, so it can simulate the
+// external_ids lookup that dedup depends on.
+function makeStatefulDbMock(
+  tables: {
+    books: unknown;
+    releases: unknown;
+    series: unknown;
+    externalIds: unknown;
+  },
+  state: { bookInsertCount: number; externalIdRows: { entityId: string }[] },
+) {
+  const select = () => ({
+    from: (table: unknown) => ({
+      where: () => ({
+        limit: async () => {
+          if (table === tables.externalIds) {
+            return state.externalIdRows.length > 0
+              ? [{ entityId: state.externalIdRows[0].entityId }]
+              : [];
+          }
+          return [];
+        },
+      }),
+    }),
+  });
+
+  const insert = (table: unknown) => {
+    return {
+      values: (rows: unknown) => ({
+        then: (resolve: (value: undefined) => void) => resolve(undefined),
+        returning: async () => {
+          if (table === tables.books) {
+            state.bookInsertCount += 1;
+            return [{ id: "book-1" }];
+          }
+          if (table === tables.releases) return [{ id: "release-1" }];
+          if (table === tables.series) return [{ id: "series-1" }];
+          return [{ id: "row-1" }];
+        },
+        onConflictDoNothing: async () => {
+          if (table === tables.externalIds) {
+            const inserted = Array.isArray(rows) ? rows : [rows];
+            for (const row of inserted as { entityId: string }[]) {
+              state.externalIdRows.push({ entityId: row.entityId });
+            }
+          }
+          return undefined;
+        },
       }),
     };
   };

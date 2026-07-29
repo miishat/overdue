@@ -55,9 +55,13 @@ describe("TrackPrompt", () => {
 
     const primary = screen.getByRole("button", { name: "Track the series" });
     expect(primary.tagName).toBe("BUTTON");
+    expect(primary.className).toContain("font-medium");
 
-    const secondary = screen.getByText("Just this book");
-    expect(secondary).toBeTruthy();
+    const secondary = screen.getByRole("button", { name: "Just this book" });
+    expect(secondary.className).toContain("text-sm");
+    expect(secondary.className).toContain("underline");
+    expect(secondary.className).toContain("opacity-70");
+    expect(secondary.className).not.toContain("font-medium");
   });
 
   it("offers only a single 'Track this book' action when the book has no series", () => {
