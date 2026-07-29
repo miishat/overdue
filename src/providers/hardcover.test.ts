@@ -78,10 +78,12 @@ describe("hardcoverProvider", () => {
     await expect(hardcoverProvider.searchBooks("x")).resolves.toEqual([]);
   });
 
-  it("returns an empty array when data.books is not an array", async () => {
+  it("returns an empty array when search.results.hits is not an array", async () => {
     server.use(
       http.post(ENDPOINT, () =>
-        HttpResponse.json({ data: { books: { unexpected: "object" } } }),
+        HttpResponse.json({
+          data: { search: { results: { hits: { unexpected: "object" } } } },
+        }),
       ),
     );
     await expect(hardcoverProvider.searchBooks("x")).resolves.toEqual([]);

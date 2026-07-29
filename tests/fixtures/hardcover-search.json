@@ -1,20 +1,46 @@
 {
   "data": {
-    "books": [
-      {
-        "id": 12345,
-        "title": "The Way of Kings",
-        "description": "Book one.",
-        "release_date": "2010-08-31",
-        "image": { "url": "https://hardcover.app/cover1.jpg" },
-        "contributions": [{ "author": { "name": "Brandon Sanderson" } }],
-        "book_series": [
+    "search": {
+      "ids": [12345],
+      "query": "way of kings",
+      "query_type": "Book",
+      "page": 1,
+      "per_page": 20,
+      "results": {
+        "facet_counts": [],
+        "found": 1,
+        "out_of": 1,
+        "page": 1,
+        "search_time_ms": 5,
+        "hits": [
           {
-            "position": 1,
-            "series": { "id": 77, "name": "The Stormlight Archive" }
+            "document": {
+              "id": "12345",
+              "title": "The Way of Kings",
+              "description": "Book one.",
+              "release_date": "2010-08-31",
+              "release_year": 2010,
+              "author_names": ["Brandon Sanderson"],
+              "image": { "url": "https://hardcover.app/cover1.jpg" },
+              "featured_series": {
+                "featured": true,
+                "position": 1.0,
+                "series": {
+                  "id": 77,
+                  "name": "The Stormlight Archive",
+                  "books_count": 10,
+                  "primary_books_count": 10,
+                  "slug": "the-stormlight-archive"
+                }
+              },
+              "series_ids": [77],
+              "series_names": ["The Stormlight Archive"],
+              "slug": "the-way-of-kings"
+            },
+            "text_match": 578730123365187601
           }
         ]
       }
-    ]
+    }
   }
 }

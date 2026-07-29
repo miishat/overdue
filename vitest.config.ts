@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // *.live.test.ts files make real network calls (see hardcover.live.test.ts)
+    // and must never run as part of the default suite or in CI.
+    exclude: ["**/*.live.test.ts", "**/node_modules/**", "**/.next/**"],
     setupFiles: ["tests/setup.ts"],
   },
   resolve: {

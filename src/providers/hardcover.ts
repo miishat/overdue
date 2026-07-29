@@ -3,17 +3,19 @@ import { asArray, asNumber, asRecord, asString, fetchJson } from "./http";
 
 const ENDPOINT = "https://api.hardcover.app/v1/graphql";
 
-// Depth 3 maximum: books -> book_series -> series. Do not nest further.
+// Hardcover's Hasura backend rejects `_ilike` (and related) filters outright:
+// HTTP 403 :: {"error":"ilike and related operations are not permitted on
+// this server."}. Book search has to go through the dedicated,
+// Typesense-backed `search` endpoint instead of a `where` filter.
+// See https://docs.hardcover.app/api/guides/searching/.
+//
+// Depth 2: search -> results. `results` is an opaque JSON scalar produced by
+// Typesense (it has no GraphQL sub-selection), so this cannot be nested
+// further and stays well under the max query depth of 3.
 const SEARCH_QUERY = `
   query SearchBooks($q: String!) {
-    books(where: { title: { _ilike: $q } }, limit: 20) {
-      id
-      title
-      description
-      release_date
-      image { url }
-      contributions { author { name } }
-      book_series { position series { id name } }
+    search(query: $q, query_type: "Book", per_page: 20, page: 1) {
+      results
     }
   }
 `;
@@ -65,11 +67,17 @@ async function query<T>(
   const token = process.env.HARDCOVER_API_TOKEN;
   if (!token) return null;
 
+  // Hardcover's token settings page hands out the value with a "Bearer "
+  // prefix already attached; a bare token (as used in tests) has none.
+  // Accept either shape rather than risking a doubled-up "Bearer Bearer ..."
+  // header, which Hasura rejects as malformed.
+  const authorization = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+
   const data = await fetchJson(ENDPOINT, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${token}`,
+      authorization,
     },
     body: JSON.stringify({ query: document, variables }),
     signal,
@@ -91,6 +99,59 @@ function toAuthors(contributions: unknown): string[] {
     .map((c) => (c ? asRecord(c.author) : null))
     .map((author) => (author ? asString(author.name) : undefined))
     .filter((n): n is string => Boolean(n));
+}
+
+// The search endpoint's Typesense documents represent numeric ids as
+// strings (e.g. "id": "2463545"), unlike the Hasura `books`/`series`
+// queries where the same field comes back as a JSON number. Accept either.
+function toId(value: unknown): number | undefined {
+  const asNum = asNumber(value);
+  if (asNum !== undefined) return asNum;
+  const asStr = asString(value);
+  if (asStr === undefined) return undefined;
+  const parsed = Number(asStr);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+// Maps a Typesense "document" from the search endpoint's results.hits[] to
+// a ProviderBook. This is a different shape than the Hasura `books` row
+// used by getBook/getSeriesEntries (see toProviderBook below), so it gets
+// its own mapping function rather than being forced into the same one.
+function toProviderBookFromSearchDocument(documentValue: unknown): ProviderBook | null {
+  const document = asRecord(documentValue);
+  if (!document) return null;
+
+  const id = toId(document.id);
+  const title = asString(document.title);
+  if (id === undefined || !title) return null;
+
+  const featuredSeries = asRecord(document.featured_series);
+  const seriesInfo = featuredSeries ? asRecord(featuredSeries.series) : null;
+  const seriesId = seriesInfo ? toId(seriesInfo.id) : undefined;
+  const seriesName = seriesInfo ? asString(seriesInfo.name) : undefined;
+  const seriesPosition = featuredSeries ? asNumber(featuredSeries.position) : undefined;
+
+  const authors = asArray(document.author_names)
+    .map((name) => asString(name))
+    .filter((name): name is string => Boolean(name));
+
+  const image = asRecord(document.image);
+  const releaseDate = asString(document.release_date);
+
+  return {
+    provider: "hardcover",
+    externalId: String(id),
+    title,
+    authors,
+    seriesName,
+    seriesExternalId: seriesId !== undefined ? String(seriesId) : undefined,
+    seriesPosition,
+    coverUrl: image ? asString(image.url) : undefined,
+    description: asString(document.description),
+    releaseDate,
+    datePrecision: releaseDate ? "day" : undefined,
+    sourceUrl: `https://hardcover.app/books/${id}`,
+  };
 }
 
 function toProviderBook(bookValue: unknown): ProviderBook | null {
@@ -134,10 +195,21 @@ export const hardcoverProvider: MetadataProvider = {
   official: true,
 
   async searchBooks(q, signal) {
-    const data = await query<Record<string, unknown>>(SEARCH_QUERY, { q: `%${q}%` }, signal);
+    const data = await query<Record<string, unknown>>(SEARCH_QUERY, { q }, signal);
     if (!data) return [];
-    return asArray(data.books)
-      .map(toProviderBook)
+
+    const search = asRecord(data.search);
+    if (!search) return [];
+
+    const results = asRecord(search.results);
+    if (!results) return [];
+
+    const hits = asArray(results.hits)
+      .map((hit) => asRecord(hit))
+      .filter((hit): hit is Record<string, unknown> => hit !== null);
+
+    return hits
+      .map((hit) => toProviderBookFromSearchDocument(hit.document))
       .filter((b): b is ProviderBook => b !== null);
   },
 
