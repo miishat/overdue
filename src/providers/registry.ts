@@ -38,13 +38,14 @@ export function searchAllProviders(
   return searchAcross(providers, query, signal);
 }
 
-export async function getSeriesEntriesFromAll(
+export async function getSeriesEntriesFromProviders(
+  list: MetadataProvider[],
   refs: SeriesRef[],
   signal?: AbortSignal,
 ): Promise<ProviderBook[]> {
   const settled = await Promise.allSettled(
     refs.map((ref) => {
-      const provider = providers.find((p) => p.name === ref.provider);
+      const provider = list.find((p) => p.name === ref.provider);
       if (!provider) return Promise.resolve([]);
       return provider.getSeriesEntries(ref.externalId, signal);
     }),
@@ -53,4 +54,11 @@ export async function getSeriesEntriesFromAll(
   return settled.flatMap((outcome) =>
     outcome.status === "fulfilled" ? outcome.value : [],
   );
+}
+
+export async function getSeriesEntriesFromAll(
+  refs: SeriesRef[],
+  signal?: AbortSignal,
+): Promise<ProviderBook[]> {
+  return getSeriesEntriesFromProviders(providers, refs, signal);
 }
