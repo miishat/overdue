@@ -11,7 +11,7 @@ export async function GET(request: Request): Promise<Response> {
     );
   }
 
-  const records = await searchAllProviders(query);
+  const records = await searchAllProviders(query, request.signal);
   const results = groupByIdentity(records)
     .map(resolveGroup)
     .sort((a, b) => b.confidence - a.confidence)

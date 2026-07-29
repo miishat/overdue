@@ -117,4 +117,17 @@ describe("GET /api/search", () => {
     expect(res.status).toBe(200);
     expect(body.results).toHaveLength(20);
   });
+
+  it("passes the request signal to searchAllProviders", async () => {
+    const { GET } = await import("./route");
+    searchAllProviders.mockResolvedValueOnce([]);
+
+    const request = new Request("http://localhost/api/search?q=babel");
+    await GET(request);
+
+    expect(searchAllProviders).toHaveBeenCalledWith(
+      "babel",
+      request.signal,
+    );
+  });
 });
