@@ -99,8 +99,111 @@ describe("SearchBox", () => {
     await flush();
 
     expect(
-      screen.getByText("Nothing found. You can add it by hand instead."),
+      screen.getByText(/Can.t find it\?/i),
     ).toBeTruthy();
+    expect(
+      screen.getByLabelText("Title", { selector: "input" }),
+    ).toBeTruthy();
+  });
+
+  it("does not show the manual entry form when results are present", async () => {
+    const book = makeBook();
+    fetchMock.mockResolvedValue(jsonResponse({ results: [book] }));
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "fellowship" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
+  });
+
+  it("does not show the manual entry form before a query settles", () => {
+    render(<SearchBox onSelect={vi.fn()} />);
+    expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
+  });
+
+  it("prefills the manual form title from the query and posts entered values on submit", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (typeof url === "string" && url.startsWith("/api/search")) {
+        return Promise.resolve(jsonResponse({ results: [] }));
+      }
+      return Promise.resolve(jsonResponse({ bookId: "book-1" }, ));
+    });
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "zzznotfound" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    const titleInput = screen.getByLabelText("Title", {
+      selector: "input",
+    }) as HTMLInputElement;
+    expect(titleInput.value).toBe("zzznotfound");
+
+    fireEvent.change(screen.getByLabelText("Author (optional)"), {
+      target: { value: "Someone Obscure" },
+    });
+    fireEvent.change(screen.getByLabelText("Notes (optional)"), {
+      target: { value: "Announced on Twitter" },
+    });
+    fireEvent.change(screen.getByLabelText("Source URL (optional)"), {
+      target: { value: "https://example.com/blog" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /add it by hand/i }));
+    await flush();
+
+    const manualCall = fetchMock.mock.calls.find(
+      (call) => call[0] === "/api/manual",
+    );
+    expect(manualCall).toBeTruthy();
+    const requestBody = JSON.parse(manualCall![1].body as string) as {
+      title: string;
+      author: string;
+      notes: string;
+      sourceUrl: string;
+    };
+    expect(requestBody).toEqual({
+      title: "zzznotfound",
+      author: "Someone Obscure",
+      notes: "Announced on Twitter",
+      sourceUrl: "https://example.com/blog",
+    });
+  });
+
+  it("shows an error and preserves the form when the manual request fails", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (typeof url === "string" && url.startsWith("/api/search")) {
+        return Promise.resolve(jsonResponse({ results: [] }));
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: "boom" }), { status: 500 }),
+      );
+    });
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "zzznotfound" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: /add it by hand/i }));
+    await flush();
+
+    expect(screen.getByText(/couldn't/i)).toBeTruthy();
+    const titleInput = screen.getByLabelText("Title", {
+      selector: "input",
+    }) as HTMLInputElement;
+    expect(titleInput.value).toBe("zzznotfound");
   });
 
   it("renders results with series badges from the API response", async () => {
