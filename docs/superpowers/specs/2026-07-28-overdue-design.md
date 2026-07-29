@@ -58,7 +58,8 @@ Not built, but not architected out of: social feed, reviews and ratings, reading
 | Providers, deferred | Penguin Random House | Developer docs appear stale (nothing newer than roughly 2019 surfaced). Build the seam, not the adapter |
 | Blog/RSS scraping | Not doing it | Fragile and high-maintenance. A manual entry with a pasted `source_url` gets the same honesty for none of the cost |
 | Database | Neon Postgres | Supabase free pauses the entire project after 7 days of low activity (tightened Feb 2026) and requires a manual dashboard unpause. That is a silent outage of the core feature. Neon scales compute to zero and wakes in milliseconds without ever pausing the project |
-| Auth | Auth.js, email magic link via Resend | Reuses the email infrastructure the notification system needs anyway |
+| Auth | None in v1. A single seeded local user behind `getCurrentUserId()` | Revised 2026-07-28. Magic link meant running an email service to log one person in. Identity stays a single choke point so real auth is a one-file change, and `user_id` foreign keys remain intact so multi-user expansion is unaffected. Open risk: a public deployment with no auth leaves `/api/search` as an open proxy to the rate-limited Hardcover token, so Task 5 must gate the deployment |
+| Email | Dropped entirely | Revised 2026-07-28. No Resend, no email notifications. Accepted risk stated below |
 | Scheduling | GitHub Actions cron | Vercel Hobby caps cron at once per day, firing anywhere within the scheduled hour. GitHub Actions is free and finer-grained, which the instant date-change alert requires |
 | Notifications | Daily digest, plus instant alert on date change | Digest respects the batch cadence honestly. Date change is the signature alert and earns its own delivery |
 | Capacitor | No | User is on iOS, but add-to-home-screen plus web push on iOS 16.4+ covers it. Capacitor costs an Apple Developer account, signing, and a build pipeline. Tripwire for revisiting: opening the app to other users and measuring iOS push failure |
@@ -73,10 +74,10 @@ Not built, but not architected out of: social feed, reviews and ratings, reading
 
 - **Next.js (App Router) + TypeScript**, deployed on Vercel
 - **Neon Postgres**, accessed via Drizzle ORM
-- **Auth.js** with email magic link (Resend)
+- **No auth library.** Identity is `getCurrentUserId()` returning a fixed seeded user id
 - **Tailwind**, no shadcn/ui. Default shadcn is recognisable on sight and would undercut the design direction; the component surface here is small enough that restyling it thoroughly costs more than writing it
 - **Serwist** for the service worker
-- **web-push** with VAPID keys, **Resend** for email
+- **web-push** with VAPID keys. No email service
 - **GitHub Actions** scheduled workflow hitting an authenticated refresh route
 
 ### The provider layer
@@ -325,15 +326,27 @@ Proper PWA: web app manifest, maskable icons, service worker with an offline she
 - Web push works on iOS only for PWAs added to the home screen, and only on iOS 16.4+.
 - There is no `beforeinstallprompt` on iOS, so the install prompt is a hand-built instructional sheet.
 - Notification permission must be requested from a real tap **inside** the installed app, not on the website.
-- iOS drops push subscriptions if the user deletes and re-adds the home screen icon. **Email is therefore load-bearing, not a consolation prize.**
+- iOS drops push subscriptions if the user deletes and re-adds the home screen icon.
 - The install prompt appears only after the user has tracked something. Never on first load.
 
 ### Delivery
 
 All release-data refreshing happens server-side on a schedule, never in a client background task.
 
-- **Daily digest** (push + email): releases today, upcoming within lead time, new announcements. One batched notification rather than several landing at once.
-- **Instant alert on date change** (push + email): the signature alert, delivered on its own. This is why scheduling runs on GitHub Actions rather than Vercel Hobby cron, which is capped at once per day.
+- **Daily digest** (push): releases today, upcoming within lead time, new announcements. One batched notification rather than several landing at once.
+- **Instant alert on date change** (push): the signature alert, delivered on its own. This is why scheduling runs on GitHub Actions rather than Vercel Hobby cron, which is capped at once per day.
+
+### Email is dropped, and what that costs
+
+**Revised 2026-07-28.** The original design made email a first-class fallback. The user chose push-only, so there is no Resend and no email path anywhere in the system.
+
+The accepted risk, stated plainly because it is the failure this app exists to prevent: **when iOS drops the push subscription, it does so silently.** A release date can move and no notification arrives, with no signal that anything is wrong. There is no second channel to catch it.
+
+Two mitigations that cost nothing and should be built in M3 rather than treated as optional:
+- The scheduled job records the last successful push per subscription. Settings surfaces subscription health, so a dead subscription is visible rather than invisible.
+- The Waiting Shelf marks changed items since last view regardless of whether a notification was delivered, so opening the app always reveals what moved.
+
+This makes the app's own UI the fallback channel instead of email.
 
 Covers are proxied through our own route rather than hot-linked, which avoids CORS issues, keeps provider URLs out of the client, and lets the service worker cache them for offline browsing.
 
@@ -358,7 +371,7 @@ Test-driven throughout, per `superpowers:test-driven-development`.
 - **M0.** Scaffolding, auth, data model, deploy pipeline
 - **M1.** Search, recognition, series detection, tracking. Four providers plus manual layer. No notifications
 - **M2.** The Waiting Shelf and the full status system, plus token architecture and the default theme. This is where the product becomes real; spend time here
-- **M3.** Scheduled refresh, change detection, notifications (push + email)
+- **M3.** Scheduled refresh, change detection, push notifications, plus subscription health surfacing and changed-since-last-view marking as the in-app fallback
 - **M4.** PWA install, offline shell, install prompts
 - **M5.** Goodreads import, the two alternate themes, density and view options, keyboard shortcuts, polish
 
@@ -373,7 +386,8 @@ Each milestone gets its own implementation plan. M0 and M1 are planned first.
 | Hardcover shuts down or restricts the API | Adapter failures in the refresh job | Postgres already owns the data; promote Wikidata in the trust matrix. Contained change by design |
 | Hardcover token cannot support multi-user | Opening the app beyond a trusted group | Requires a different primary provider or per-user tokens. Blocker for public launch, not for v1 |
 | Free-tier scheduled runs delayed or skipped | Gaps in `ChangeLog` observation timestamps | Job is idempotent and sliceable, so a skipped run self-heals on the next one |
-| iOS push subscription silently lost | User reports missing notifications | Email fallback covers it; settings surface subscription health |
+| iOS push subscription silently lost | Gaps between `ChangeLog` entries and delivered notifications | No second channel, since email was dropped. Settings surfaces subscription health and the Shelf marks changed-since-last-view, so the app's own UI is the fallback |
+| Public deployment has no authentication | Task 5, before the Vercel URL goes live | `/api/search` is an open proxy to the rate-limited Hardcover token. Gate with Vercel Deployment Protection or a shared-secret cookie before making the deployment public |
 | Series data wrong or missing for a niche series | User hits a series the providers do not know | Manual layer, which outranks every provider |
 | Waiting Shelf needs structural rework after real use | Living with it post-M2 | Alternate themes deferred to M5 specifically so this is paid for once |
 
