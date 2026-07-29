@@ -5,6 +5,16 @@ import { asArray, asRecord, asString, fetchJson } from "./http";
 
 const ENDPOINT = "https://www.googleapis.com/books/v1/volumes";
 
+// Unauthenticated requests share a low, easily-exhausted daily quota. An API
+// key raises that ceiling substantially; append it when present rather than
+// requiring it, so the adapter still degrades gracefully with none set.
+function withKey(url: string): string {
+  const key = process.env.GOOGLE_BOOKS_API_KEY;
+  if (!key) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}key=${encodeURIComponent(key)}`;
+}
+
 export function parsePublishedDate(
   raw: string | undefined,
 ): { date: string; precision: DatePrecision } | null {
@@ -56,7 +66,7 @@ export const googleBooksProvider: MetadataProvider = {
   official: false,
 
   async searchBooks(query, signal) {
-    const url = `${ENDPOINT}?q=${encodeURIComponent(query)}&maxResults=20`;
+    const url = withKey(`${ENDPOINT}?q=${encodeURIComponent(query)}&maxResults=20`);
     const data = await fetchJson(url, { signal });
     const record = asRecord(data);
     if (!record) return [];
@@ -66,7 +76,7 @@ export const googleBooksProvider: MetadataProvider = {
   },
 
   async getBook(externalId, signal) {
-    const data = await fetchJson(`${ENDPOINT}/${externalId}`, { signal });
+    const data = await fetchJson(withKey(`${ENDPOINT}/${externalId}`), { signal });
     return toProviderBook(data);
   },
 

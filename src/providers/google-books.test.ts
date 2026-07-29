@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { server } from "../../tests/msw-server";
 import fixture from "../../tests/fixtures/google-books-search.json";
 import { googleBooksProvider } from "./google-books";
@@ -58,5 +58,56 @@ describe("googleBooksProvider", () => {
       ),
     );
     await expect(googleBooksProvider.searchBooks("anything")).resolves.toHaveLength(2);
+  });
+
+  describe("API key", () => {
+    const ORIGINAL = process.env.GOOGLE_BOOKS_API_KEY;
+
+    beforeEach(() => {
+      delete process.env.GOOGLE_BOOKS_API_KEY;
+    });
+
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.GOOGLE_BOOKS_API_KEY;
+      else process.env.GOOGLE_BOOKS_API_KEY = ORIGINAL;
+    });
+
+    it("omits the key parameter when none is configured", async () => {
+      let seenUrl = "";
+      server.use(
+        http.get(ENDPOINT, ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(fixture);
+        }),
+      );
+      await googleBooksProvider.searchBooks("way of kings");
+      expect(seenUrl).not.toContain("key=");
+    });
+
+    it("appends the key parameter when GOOGLE_BOOKS_API_KEY is set", async () => {
+      process.env.GOOGLE_BOOKS_API_KEY = "test-key-123";
+      let seenUrl = "";
+      server.use(
+        http.get(ENDPOINT, ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(fixture);
+        }),
+      );
+      await googleBooksProvider.searchBooks("way of kings");
+      expect(seenUrl).toContain("key=test-key-123");
+    });
+
+    it("appends the key correctly to getBook, which has no prior query string", async () => {
+      process.env.GOOGLE_BOOKS_API_KEY = "test-key-456";
+      let seenUrl = "";
+      server.use(
+        http.get(`${ENDPOINT}/gbs-1`, ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(fixture.items[0]);
+        }),
+      );
+      await googleBooksProvider.getBook("gbs-1");
+      expect(seenUrl).toContain("?key=test-key-456");
+    });
   });
 });
