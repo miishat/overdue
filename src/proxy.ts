@@ -54,6 +54,9 @@ function denyResponse(): NextResponse {
   });
 }
 
+// This matcher covers public/ assets and metadata routes on purpose: a
+// future sitemap.ts, robots.ts, or manifest.webmanifest would 401 for
+// crawlers and installers otherwise, and that is intentional, not a bug.
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
