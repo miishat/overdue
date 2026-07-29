@@ -120,4 +120,49 @@ describe("SearchBox", () => {
       screen.getByText("Book 1 of The Lord of the Rings"),
     ).toBeTruthy();
   });
+
+  it("does not let a slower, superseded request overwrite newer results", async () => {
+    const firstBook = makeBook({ key: "book-first", title: "First Result" });
+    const secondBook = makeBook({ key: "book-second", title: "Second Result" });
+
+    let resolveFirst: (value: Response) => void = () => {};
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    fetchMock
+      .mockImplementationOnce(() => firstResponse)
+      .mockImplementationOnce(() => Promise.resolve(jsonResponse({ results: [secondBook] })));
+
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    // First query settles the debounce and fires request one.
+    fireEvent.change(input, { target: { value: "bab" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    // User keeps typing; the debounced value changes again, firing request two
+    // and aborting request one's controller (the fetch mock itself still
+    // resolves, since AbortController.abort() doesn't reject a stubbed fetch).
+    fireEvent.change(input, { target: { value: "babel" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    // Request two (the newer, correct one) resolves first.
+    await flush();
+    expect(screen.getByText("Second Result")).toBeTruthy();
+
+    // Request one resolves late, after request two already rendered.
+    resolveFirst(jsonResponse({ results: [firstBook] }));
+    await flush();
+
+    // The stale, superseded response must not overwrite the newer results.
+    expect(screen.queryByText("First Result")).toBeNull();
+    expect(screen.getByText("Second Result")).toBeTruthy();
+  });
 });

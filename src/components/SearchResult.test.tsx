@@ -29,6 +29,16 @@ describe("SearchResult", () => {
     expect(screen.getByText("Book 2 of Some Series")).toBeTruthy();
   });
 
+  it("renders a badge with just the series name when seriesPosition is absent", () => {
+    const book = makeBook({ seriesName: "Some Series", seriesPosition: undefined });
+    render(
+      <ul>
+        <SearchResult book={book} onSelect={vi.fn()} />
+      </ul>,
+    );
+    expect(screen.getByText("Some Series")).toBeTruthy();
+  });
+
   it("renders no badge when neither seriesPosition nor seriesName is present", () => {
     const book = makeBook();
     render(

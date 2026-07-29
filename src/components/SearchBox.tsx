@@ -29,15 +29,36 @@ export function SearchBox({ onSelect }: Props) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
+    // Guards against a superseded request's handlers running after a newer
+    // request has already resolved. Every keystroke can abort the previous
+    // fetch and start a new one, but an aborted fetch's promise chain still
+    // settles (often via rejection, but ordering is not guaranteed), so
+    // without this check a slow, stale response could overwrite fresher
+    // results or flip loading off while a newer request is still in flight.
+    // Do not remove this as "redundant" with the abort call above.
+    let cancelled = false;
+
     fetch(`/api/search?q=${encodeURIComponent(debounced)}`, {
       signal: controller.signal,
     })
       .then((res) => (res.ok ? res.json() : { results: [] }))
-      .then((data: { results?: ResolvedBook[] }) => setResults(data.results ?? []))
-      .catch(() => setResults([]))
-      .finally(() => setLoading(false));
+      .then((data: { results?: ResolvedBook[] }) => {
+        if (cancelled) return;
+        setResults(data.results ?? []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setResults([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
 
-    return () => controller.abort();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [debounced, isQueryLongEnough]);
 
   const displayedResults = isQueryLongEnough ? results : [];
