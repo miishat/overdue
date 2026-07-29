@@ -32,13 +32,29 @@ function buildOfficialProviders(): Record<ProviderName, boolean> {
 
 export const OFFICIAL_PROVIDERS: Record<ProviderName, boolean> = buildOfficialProviders();
 
+// Per-provider deadline for a single search/lookup call. Long enough for a
+// healthy provider to answer, short enough that a typeahead still feels
+// alive. A provider that misses this deadline contributes nothing, exactly
+// as if it had failed outright (see combineSignals + fetchJson's abort
+// handling), rather than holding up the rest of the batch.
+export const PROVIDER_TIMEOUT_MS = 4000;
+
+// Combines the caller's own cancellation (e.g. a request's AbortSignal
+// threaded through from the search route) with a per-call timeout, so a
+// provider is cut off by whichever fires first.
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
 export async function searchAcross(
   list: MetadataProvider[],
   query: string,
   signal?: AbortSignal,
+  timeoutMs: number = PROVIDER_TIMEOUT_MS,
 ): Promise<ProviderBook[]> {
   const settled = await Promise.allSettled(
-    list.map((p) => p.searchBooks(query, signal)),
+    list.map((p) => p.searchBooks(query, withTimeout(signal, timeoutMs))),
   );
 
   return settled.flatMap((outcome) =>
@@ -57,12 +73,13 @@ export async function getSeriesEntriesFromProviders(
   list: MetadataProvider[],
   refs: SeriesRef[],
   signal?: AbortSignal,
+  timeoutMs: number = PROVIDER_TIMEOUT_MS,
 ): Promise<ProviderBook[]> {
   const settled = await Promise.allSettled(
     refs.map((ref) => {
       const provider = list.find((p) => p.name === ref.provider);
       if (!provider) return Promise.resolve([]);
-      return provider.getSeriesEntries(ref.externalId, signal);
+      return provider.getSeriesEntries(ref.externalId, withTimeout(signal, timeoutMs));
     }),
   );
 

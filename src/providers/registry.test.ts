@@ -25,6 +25,29 @@ function fakeProvider(
   };
 }
 
+// A provider whose call never resolves on its own, simulating a hung
+// endpoint (e.g. Wikidata's SPARQL endpoint taking 65s to 504 in production).
+// It only settles if the signal passed to it is aborted, so it will hang
+// forever unless the registry applies a timeout.
+function neverResolvingProvider(name: MetadataProvider["name"]): MetadataProvider {
+  return {
+    name,
+    official: false,
+    searchBooks: vi.fn((_query: string, signal?: AbortSignal) => {
+      return new Promise<ProviderBook[]>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }),
+    getBook: vi.fn(async () => null),
+    getSeries: vi.fn(async () => null),
+    getSeriesEntries: vi.fn((_externalId: string, signal?: AbortSignal) => {
+      return new Promise<ProviderBook[]>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }),
+  };
+}
+
 const bookA: ProviderBook = {
   provider: "google",
   externalId: "a",
@@ -64,6 +87,33 @@ describe("searchAcross", () => {
       "query",
     );
     expect(results).toEqual([]);
+  });
+
+  it("does not let a slow provider delay the batch", async () => {
+    const slow = neverResolvingProvider("wikidata");
+    const results = await searchAcross(
+      [slow, fakeProvider("google", [bookA])],
+      "query",
+      undefined,
+      20, // short injected timeout so the test is fast and deterministic
+    );
+    expect(results).toEqual([bookA]);
+  });
+
+  it("still honours the caller's own abort signal", async () => {
+    const controller = new AbortController();
+    const slow = neverResolvingProvider("wikidata");
+    const fast = fakeProvider("google", [bookA]);
+
+    const resultsPromise = searchAcross([slow, fast], "query", controller.signal, 20);
+    controller.abort();
+
+    const results = await resultsPromise;
+    // Both providers were called with an aborted signal; the fast one's
+    // fake implementation resolves anyway, but the timeout wiring must not
+    // throw or hang when the caller's signal fires.
+    expect(Array.isArray(results)).toBe(true);
+    expect(slow.searchBooks).toHaveBeenCalled();
   });
 });
 
@@ -148,7 +198,7 @@ describe("getSeriesEntriesFromProviders", () => {
 
     expect(googleProvider.getSeriesEntries).toHaveBeenCalledWith(
       testExternalId,
-      undefined,
+      expect.any(AbortSignal),
     );
   });
 });

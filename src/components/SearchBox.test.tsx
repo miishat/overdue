@@ -308,4 +308,89 @@ describe("SearchBox", () => {
     expect(screen.queryByText("First Result")).toBeNull();
     expect(screen.getByText("Second Result")).toBeTruthy();
   });
+
+  it("shows a loading indicator while a search is in flight and hides it when it settles", async () => {
+    let resolveFetch: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => pending);
+
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "babel" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(screen.getByText(/searching/i)).toBeTruthy();
+
+    resolveFetch(jsonResponse({ results: [] }));
+    await flush();
+
+    expect(screen.queryByText(/searching/i)).toBeNull();
+  });
+
+  it("never shows the loading indicator and the empty state at the same time", async () => {
+    let resolveFetch: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => pending);
+
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "zzznotfound" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    // While in flight: loading shown, empty state (manual form) not shown.
+    expect(screen.getByText(/searching/i)).toBeTruthy();
+    expect(screen.queryByLabelText("Title", { selector: "input" })).toBeNull();
+
+    resolveFetch(jsonResponse({ results: [] }));
+    await flush();
+
+    // After settling with zero results: empty state shown, loading gone.
+    expect(screen.queryByText(/searching/i)).toBeNull();
+    expect(screen.getByLabelText("Title", { selector: "input" })).toBeTruthy();
+  });
+
+  it("clears loading when the query drops below the 2-character threshold mid-flight", async () => {
+    let resolveFetch: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    fetchMock.mockImplementationOnce(() => pending);
+
+    render(<SearchBox onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search for a book or author");
+
+    fireEvent.change(input, { target: { value: "babel" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(screen.getByText(/searching/i)).toBeTruthy();
+
+    // Query drops back under the threshold while the request is in flight.
+    fireEvent.change(input, { target: { value: "b" } });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    await flush();
+
+    expect(screen.queryByText(/searching/i)).toBeNull();
+
+    // Late resolution of the abandoned request must not resurrect loading.
+    resolveFetch(jsonResponse({ results: [] }));
+    await flush();
+    expect(screen.queryByText(/searching/i)).toBeNull();
+  });
 });

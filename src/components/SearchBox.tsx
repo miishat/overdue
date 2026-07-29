@@ -29,6 +29,13 @@ export function SearchBox({ onSelect }: Props) {
 
   useEffect(() => {
     if (!isQueryLongEnough) {
+      // Clears a loading flag left stuck true when the query drops back
+      // under the threshold while a request is still in flight: the effect
+      // cleanup below sets `cancelled`, so the in-flight request's
+      // `.finally` skips `setLoading(false)`, and this early return never
+      // ran it either.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLoading(false);
       return;
     }
 
@@ -36,7 +43,6 @@ export function SearchBox({ onSelect }: Props) {
     // Fetching in response to a debounced query is the documented pattern for
     // syncing with an external system; the loading flag must flip the moment
     // the request starts, so it cannot be deferred into the promise chain.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
 
     // Guards against a superseded request's handlers running after a newer
@@ -128,6 +134,10 @@ export function SearchBox({ onSelect }: Props) {
         className="rounded-sm border px-3 py-2"
         autoComplete="off"
       />
+
+      <p aria-live="polite" className="text-sm opacity-70">
+        {loading ? "Searching..." : ""}
+      </p>
 
       <ul aria-live="polite" className="flex flex-col">
         {displayedResults.map((book) => (
