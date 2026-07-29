@@ -1,0 +1,28 @@
+{
+  "searchinfo": { "search": "the way of kings" },
+  "search": [
+    {
+      "id": "Q2136877",
+      "title": "Q2136877",
+      "pageid": 2062826,
+      "concepturi": "http://www.wikidata.org/entity/Q2136877",
+      "repository": "wikidata",
+      "url": "//www.wikidata.org/wiki/Q2136877",
+      "label": "The Way of Kings",
+      "description": "2010 novel by Brandon Sanderson",
+      "match": { "type": "label", "language": "en", "text": "The Way of Kings" }
+    },
+    {
+      "id": "Q9999999",
+      "title": "Q9999999",
+      "pageid": 1,
+      "concepturi": "http://www.wikidata.org/entity/Q9999999",
+      "repository": "wikidata",
+      "url": "//www.wikidata.org/wiki/Q9999999",
+      "label": "Stormlight Archive, Book Six",
+      "description": "upcoming novel by Brandon Sanderson",
+      "match": { "type": "label", "language": "en", "text": "Stormlight Archive, Book Six" }
+    }
+  ],
+  "success": 1
+}

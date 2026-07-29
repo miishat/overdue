@@ -1,0 +1,29 @@
+{
+  "head": { "vars": ["book", "ordinal", "pubDate", "precision", "series", "seriesLabel"] },
+  "results": {
+    "bindings": [
+      {
+        "book": { "type": "uri", "value": "http://www.wikidata.org/entity/Q2136877" },
+        "ordinal": { "type": "literal", "value": "1" },
+        "pubDate": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+          "type": "literal",
+          "value": "2010-08-31T00:00:00Z"
+        },
+        "precision": {
+          "datatype": "http://www.w3.org/2001/XMLSchema#integer",
+          "type": "literal",
+          "value": "11"
+        },
+        "series": { "type": "uri", "value": "http://www.wikidata.org/entity/Q477675" },
+        "seriesLabel": { "xml:lang": "en", "type": "literal", "value": "The Stormlight Archive" }
+      },
+      {
+        "book": { "type": "uri", "value": "http://www.wikidata.org/entity/Q9999999" },
+        "ordinal": { "type": "literal", "value": "6" },
+        "series": { "type": "uri", "value": "http://www.wikidata.org/entity/Q477675" },
+        "seriesLabel": { "xml:lang": "en", "type": "literal", "value": "The Stormlight Archive" }
+      }
+    ]
+  }
+}
