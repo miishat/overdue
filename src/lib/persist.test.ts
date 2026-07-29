@@ -41,10 +41,15 @@ describe("externalIdRows", () => {
 });
 
 describe("releaseSourceRows", () => {
-  it("records one row per provider that made a claim", async () => {
+  it("records one row per provider that made a claim, using that provider's own reported date", async () => {
     const { releaseSourceRows } = await import("./persist");
-    const rows = releaseSourceRows("release-1", "2026-08-12", [
-      { provider: "hardcover", externalId: "h", sourceUrl: "https://hc/1" },
+    const rows = releaseSourceRows("release-1", [
+      {
+        provider: "hardcover",
+        externalId: "h",
+        sourceUrl: "https://hc/1",
+        releaseDate: "2026-08-12",
+      },
       { provider: "google", externalId: "g" },
     ]);
 
@@ -57,9 +62,34 @@ describe("releaseSourceRows", () => {
     });
   });
 
+  it("stores null for a source that reported no date, not the resolved date", async () => {
+    const { releaseSourceRows } = await import("./persist");
+    const rows = releaseSourceRows("r", [
+      { provider: "hardcover", externalId: "h", releaseDate: "2026-08-12" },
+      { provider: "google", externalId: "g" },
+    ]);
+
+    const google = rows.find((r) => r.provider === "google");
+    expect(google?.valueSeen).toBeNull();
+  });
+
+  it("carries each provider's own claimed date, not the resolved one, when providers disagree", async () => {
+    const { releaseSourceRows } = await import("./persist");
+    const rows = releaseSourceRows("r", [
+      { provider: "hardcover", externalId: "h", releaseDate: "2026-08-12" },
+      { provider: "wikidata", externalId: "w", releaseDate: "2026-09-01" },
+    ]);
+
+    const hardcover = rows.find((r) => r.provider === "hardcover");
+    const wikidata = rows.find((r) => r.provider === "wikidata");
+    expect(hardcover?.valueSeen).toBe("2026-08-12");
+    expect(wikidata?.valueSeen).toBe("2026-09-01");
+    expect(hardcover?.valueSeen).not.toBe(wikidata?.valueSeen);
+  });
+
   it("ranks manual highest and google lowest", async () => {
     const { releaseSourceRows } = await import("./persist");
-    const rows = releaseSourceRows("r", null, [
+    const rows = releaseSourceRows("r", [
       { provider: "google", externalId: "g" },
       { provider: "manual", externalId: "m" },
     ]);
@@ -549,6 +579,115 @@ describe("persistResolvedBook status derivation", () => {
     );
 
     vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("derives ANNOUNCED, not RUMORED, for a manual entry with no release date", async () => {
+    vi.resetModules();
+
+    const { books, releases } = await import("@/db/schema/catalog").then(
+      async (catalog) => ({
+        books: catalog.books,
+        releases: (await import("@/db/schema/releases")).releases,
+      }),
+    );
+
+    // deriveStatus itself is not mocked here: the point of this test is
+    // that persistResolvedBook feeds it a sourceOfficial that is true for
+    // a manual record, so the real status logic lands on ANNOUNCED rather
+    // than RUMORED for a book with no date.
+    const insertedReleases: { status: string }[] = [];
+    const dbMock = makeDbMock({ books, releases });
+    const originalInsert = dbMock.insert;
+    dbMock.insert = ((table: unknown) => {
+      const chain = originalInsert(table);
+      if (table === releases) {
+        const originalValues = chain.values;
+        chain.values = (rows: unknown) => {
+          const [row] = (Array.isArray(rows) ? rows : [rows]) as { status: string }[];
+          insertedReleases.push({ status: row.status });
+          return originalValues(rows);
+        };
+      }
+      return chain;
+    }) as typeof dbMock.insert;
+    vi.doMock("@/db/client", () => ({ db: dbMock }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    // Shaped exactly like /api/manual's ResolvedBook: a manual source, no
+    // provenance.releaseDate (nothing claimed a date), no releaseDate.
+    const book = {
+      key: "manual:some-unlisted-book",
+      title: "Some Unlisted Book",
+      authors: ["An Author"],
+      provenance: { title: "manual" as const, authors: "manual" as const },
+      sources: [{ provider: "manual" as const, externalId: "manual:some-unlisted-book" }],
+      confidence: 100,
+    };
+
+    await persistResolvedBook(book);
+
+    expect(insertedReleases[0]?.status).toBe("ANNOUNCED");
+    expect(insertedReleases[0]?.status).not.toBe("RUMORED");
+
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("derives RUMORED for a book known only to Google Books and Open Library with no date", async () => {
+    vi.resetModules();
+
+    const { books, releases } = await import("@/db/schema/catalog").then(
+      async (catalog) => ({
+        books: catalog.books,
+        releases: (await import("@/db/schema/releases")).releases,
+      }),
+    );
+
+    // deriveStatus itself is not mocked here: this is the counterpart to
+    // the manual-entry test above. Google and Open Library are both
+    // non-official providers, so a book known only to them with no date
+    // must still land on RUMORED. This guards against a fix that makes
+    // sourceOfficial true unconditionally (which would make the manual
+    // test above pass for the wrong reason).
+    const insertedReleases: { status: string }[] = [];
+    const dbMock = makeDbMock({ books, releases });
+    const originalInsert = dbMock.insert;
+    dbMock.insert = ((table: unknown) => {
+      const chain = originalInsert(table);
+      if (table === releases) {
+        const originalValues = chain.values;
+        chain.values = (rows: unknown) => {
+          const [row] = (Array.isArray(rows) ? rows : [rows]) as { status: string }[];
+          insertedReleases.push({ status: row.status });
+          return originalValues(rows);
+        };
+      }
+      return chain;
+    }) as typeof dbMock.insert;
+    vi.doMock("@/db/client", () => ({ db: dbMock }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const book = {
+      key: "google:unofficial-only-book",
+      title: "Unofficial Only Book",
+      authors: ["An Author"],
+      provenance: { title: "google" as const, authors: "google" as const },
+      sources: [
+        { provider: "google" as const, externalId: "g1" },
+        { provider: "openlibrary" as const, externalId: "ol1" },
+      ],
+      confidence: 50,
+    };
+
+    await persistResolvedBook(book);
+
+    expect(insertedReleases[0]?.status).toBe("RUMORED");
+    expect(insertedReleases[0]?.status).not.toBe("ANNOUNCED");
+
     vi.doUnmock("@/db/client");
     vi.resetModules();
   });

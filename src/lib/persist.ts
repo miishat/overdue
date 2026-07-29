@@ -4,6 +4,7 @@ import type { ProviderName } from "@/db/schema/enums";
 import { authors, bookAuthors, books, series } from "@/db/schema/catalog";
 import { externalIds } from "@/db/schema/identity";
 import { releases, releaseSources } from "@/db/schema/releases";
+import { OFFICIAL_PROVIDERS } from "@/providers/registry";
 import { deriveStatus } from "@/resolution/status";
 import type { ResolvedBook } from "@/resolution/resolve";
 
@@ -39,14 +40,18 @@ const TRUST_RANK: Record<ProviderName, number> = {
 
 export function releaseSourceRows(
   releaseId: string,
-  valueSeen: string | null,
-  sources: { provider: ProviderName; externalId: string; sourceUrl?: string }[],
+  sources: {
+    provider: ProviderName;
+    externalId: string;
+    sourceUrl?: string;
+    releaseDate?: string | null;
+  }[],
 ): ReleaseSourceRow[] {
   return sources.map((source) => ({
     releaseId,
     provider: source.provider,
     sourceUrl: source.sourceUrl,
-    valueSeen,
+    valueSeen: source.releaseDate ?? null,
     trustRank: TRUST_RANK[source.provider],
   }));
 }
@@ -268,15 +273,25 @@ export async function persistResolvedBook(
     await db.insert(externalIds).values(rows).onConflictDoNothing();
   }
 
+  // Whether the record itself is official, not merely whether an official
+  // provider happened to be the one that supplied the release date. A
+  // manual entry has no adapter-level release date claim until the user
+  // adds one, but it is still the user's own record and should read as
+  // ANNOUNCED rather than RUMORED. OFFICIAL_PROVIDERS mirrors each
+  // adapter's own `official` flag (plus manual), so this can't drift from
+  // a second, hand-maintained list of "official" provider names.
+  const sourceOfficial =
+    book.sources.some((source) => OFFICIAL_PROVIDERS[source.provider]) ||
+    (book.provenance.releaseDate
+      ? OFFICIAL_PROVIDERS[book.provenance.releaseDate]
+      : false);
+
   const status = deriveStatus({
     now: new Date(),
     date: book.releaseDate ? new Date(book.releaseDate) : null,
     precision: book.datePrecision ?? null,
     hasBookRecord: true,
-    sourceOfficial:
-      book.provenance.releaseDate === "hardcover" ||
-      book.provenance.releaseDate === "wikidata" ||
-      book.provenance.releaseDate === "manual",
+    sourceOfficial,
     seriesStatus: null,
     lastSeriesReleaseAt: null,
     hiatusThresholdYears: 4,
@@ -317,11 +332,7 @@ export async function persistResolvedBook(
   // muddy "which providers currently claim this" on every refresh pass.
   await db.delete(releaseSources).where(eq(releaseSources.releaseId, release[0].id));
 
-  const sourceRows = releaseSourceRows(
-    release[0].id,
-    book.releaseDate ?? null,
-    book.sources,
-  );
+  const sourceRows = releaseSourceRows(release[0].id, book.sources);
   if (sourceRows.length > 0) {
     await db.insert(releaseSources).values(sourceRows);
   }

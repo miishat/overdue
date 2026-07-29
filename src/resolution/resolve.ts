@@ -16,7 +16,13 @@ export interface ResolvedBook {
   releaseDate?: string;
   datePrecision?: DatePrecision;
   provenance: Partial<Record<ResolvableField, ProviderName>>;
-  sources: { provider: ProviderName; externalId: string; sourceUrl?: string }[];
+  sources: {
+    provider: ProviderName;
+    externalId: string;
+    sourceUrl?: string;
+    releaseDate?: string;
+    datePrecision?: DatePrecision;
+  }[];
   confidence: number;
 }
 
@@ -90,6 +96,8 @@ export function resolveGroup(group: IdentityGroup): ResolvedBook {
       provider: r.provider,
       externalId: r.externalId,
       sourceUrl: r.sourceUrl,
+      releaseDate: r.releaseDate,
+      datePrecision: r.datePrecision,
     })),
     confidence: computeConfidence(group.records),
   };

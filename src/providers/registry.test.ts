@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MetadataProvider, ProviderBook } from "./types";
-import { searchAcross, getSeriesEntriesFromProviders } from "./registry";
+import {
+  searchAcross,
+  getSeriesEntriesFromProviders,
+  OFFICIAL_PROVIDERS,
+  providers,
+} from "./registry";
 
 function fakeProvider(
   name: MetadataProvider["name"],
@@ -145,5 +150,24 @@ describe("getSeriesEntriesFromProviders", () => {
       testExternalId,
       undefined,
     );
+  });
+});
+
+describe("OFFICIAL_PROVIDERS", () => {
+  it("matches each adapter's own official flag, plus manual", () => {
+    expect(OFFICIAL_PROVIDERS.hardcover).toBe(true);
+    expect(OFFICIAL_PROVIDERS.wikidata).toBe(true);
+    expect(OFFICIAL_PROVIDERS.google).toBe(false);
+    expect(OFFICIAL_PROVIDERS.openlibrary).toBe(false);
+    expect(OFFICIAL_PROVIDERS.manual).toBe(true);
+  });
+
+  it("cannot drift from the registry: derives from every provider's own flag", () => {
+    // Guards against a hand-maintained duplicate list: if a provider's
+    // `official` flag changes, or a new provider is added, this table
+    // must move with it rather than being independently edited.
+    for (const provider of providers) {
+      expect(OFFICIAL_PROVIDERS[provider.name]).toBe(provider.official);
+    }
   });
 });

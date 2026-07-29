@@ -17,6 +17,21 @@ export const providers: MetadataProvider[] = [
   googleBooksProvider,
 ];
 
+// Manual entries have no MetadataProvider adapter (there is nothing to
+// fetch), but they are the most official source there is: the user typed
+// it in themselves. Combining that with each adapter's own `official` flag
+// gives one place that knows what counts as official, instead of a second,
+// hand-maintained list of provider names that can drift out of sync.
+function buildOfficialProviders(): Record<ProviderName, boolean> {
+  const map = { manual: true } as Record<ProviderName, boolean>;
+  for (const provider of providers) {
+    map[provider.name] = provider.official;
+  }
+  return map;
+}
+
+export const OFFICIAL_PROVIDERS: Record<ProviderName, boolean> = buildOfficialProviders();
+
 export async function searchAcross(
   list: MetadataProvider[],
   query: string,
