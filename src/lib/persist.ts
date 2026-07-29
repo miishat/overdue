@@ -206,6 +206,10 @@ export async function persistResolvedBook(
     hiatusThresholdYears: 4,
   });
 
+  // A releases row represents current belief about one book in one region
+  // and format. The unique constraint on (book_id, region, format) makes a
+  // second persist of the same book refresh that belief rather than add a
+  // sibling row, which is what kept fragmenting provenance before.
   const release = await db
     .insert(releases)
     .values({
@@ -217,10 +221,26 @@ export async function persistResolvedBook(
       status,
       confidence: book.confidence,
     })
+    .onConflictDoUpdate({
+      target: [releases.bookId, releases.region, releases.format],
+      set: {
+        date: book.releaseDate ?? null,
+        datePrecision: book.datePrecision ?? null,
+        status,
+        confidence: book.confidence,
+        updatedAt: new Date(),
+      },
+    })
     .returning({ id: releases.id });
 
-  // Every provider that made a claim is recorded, including the ones that
-  // lost. Keeping the disagreement is what makes provenance honest.
+  // Release sources are current state (which providers back today's
+  // belief and what they last reported), not an audit trail: ChangeLog is
+  // the designated home for history in this project. So a re-persist
+  // clears the prior source rows for this release and re-inserts fresh
+  // ones, rather than appending duplicates that would bloat the table and
+  // muddy "which providers currently claim this" on every refresh pass.
+  await db.delete(releaseSources).where(eq(releaseSources.releaseId, release[0].id));
+
   const sourceRows = releaseSourceRows(
     release[0].id,
     book.releaseDate ?? null,

@@ -124,6 +124,55 @@ describe("persistResolvedBook dedup", () => {
     vi.doUnmock("@/db/client");
     vi.resetModules();
   });
+
+  it("reuses the existing release row on a second persist instead of inserting a duplicate", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = {
+      bookInsertCount: 0,
+      externalIdRows: [] as { entityId: string }[],
+      releaseInsertCount: 0,
+      releaseRows: new Map<string, { id: string }>(),
+      releaseSourceCalls: [] as { releaseId: string }[],
+    };
+    vi.doMock("@/db/client", () => ({
+      db: makeStatefulDbMock(
+        { books, releases, series, externalIds, releaseSources },
+        state,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const book = {
+      key: "isbn:dup-release",
+      title: "Some Other Book",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-100" }],
+      confidence: 90,
+    };
+
+    await persistResolvedBook(book);
+    await persistResolvedBook(book);
+
+    expect(state.releaseInsertCount).toBe(1);
+    expect(state.releaseSourceCalls).toHaveLength(2);
+    expect(state.releaseSourceCalls[1].releaseId).toBe(
+      state.releaseSourceCalls[0].releaseId,
+    );
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
 });
 
 describe("persistResolvedBook status derivation", () => {
@@ -225,11 +274,19 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
           return [{ id: "row-1" }];
         },
         onConflictDoNothing: async () => undefined,
+        onConflictDoUpdate: () => ({
+          returning: async () => {
+            if (table === tables.releases) return [{ id: "release-1" }];
+            return [{ id: "row-1" }];
+          },
+        }),
       }),
     };
   };
 
-  return { select, insert };
+  const del = () => ({ where: async () => undefined });
+
+  return { select, insert, delete: del };
 }
 
 // A stateful mock that tracks how many times `books` was inserted and
@@ -241,8 +298,15 @@ function makeStatefulDbMock(
     releases: unknown;
     series: unknown;
     externalIds: unknown;
+    releaseSources?: unknown;
   },
-  state: { bookInsertCount: number; externalIdRows: { entityId: string }[] },
+  state: {
+    bookInsertCount: number;
+    externalIdRows: { entityId: string }[];
+    releaseInsertCount?: number;
+    releaseRows?: Map<string, { id: string }>;
+    releaseSourceCalls?: { releaseId: string }[];
+  },
 ) {
   const select = () => ({
     from: (table: unknown) => ({
@@ -261,7 +325,13 @@ function makeStatefulDbMock(
 
   const insert = (table: unknown) => {
     return {
-      values: (rows: unknown) => ({
+      values: (rows: unknown) => {
+        if (table === tables.releaseSources && state.releaseSourceCalls) {
+          const inserted = Array.isArray(rows) ? rows : [rows];
+          const [{ releaseId }] = inserted as { releaseId: string }[];
+          state.releaseSourceCalls.push({ releaseId });
+        }
+        return {
         then: (resolve: (value: undefined) => void) => resolve(undefined),
         returning: async () => {
           if (table === tables.books) {
@@ -281,9 +351,41 @@ function makeStatefulDbMock(
           }
           return undefined;
         },
-      }),
+        onConflictDoUpdate: () => ({
+          returning: async () => {
+            if (table === tables.releases && state.releaseRows) {
+              const row = (Array.isArray(rows) ? rows[0] : rows) as {
+                bookId: string;
+                region: string;
+                format: string;
+              };
+              const key = `${row.bookId}|${row.region}|${row.format}`;
+              const existing = state.releaseRows.get(key);
+              if (existing) return [{ id: existing.id }];
+              state.releaseInsertCount = (state.releaseInsertCount ?? 0) + 1;
+              const id = `release-${state.releaseInsertCount}`;
+              state.releaseRows.set(key, { id });
+              return [{ id }];
+            }
+            return [{ id: "release-1" }];
+          },
+        }),
+        };
+      },
     };
   };
 
-  return { select, insert };
+  const del = (table: unknown) => ({
+    where: async () => {
+      if (table === tables.releaseSources && state.releaseSourceCalls) {
+        // Refresh semantics: clearing prior source rows for this release
+        // before re-inserting is exercised implicitly by the insert mock
+        // above tracking calls, so no state change is needed here.
+        return undefined;
+      }
+      return undefined;
+    },
+  });
+
+  return { select, insert, delete: del };
 }

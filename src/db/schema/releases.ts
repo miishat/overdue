@@ -5,6 +5,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
 } from "drizzle-orm/pg-core";
 import { books } from "./catalog";
@@ -30,7 +31,14 @@ export const releases = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("release_book_idx").on(t.bookId), index("release_date_idx").on(t.date)],
+  (t) => [
+    index("release_book_idx").on(t.bookId),
+    index("release_date_idx").on(t.date),
+    // One row per (book, region, format): re-persisting the same book
+    // refreshes what we believe about that release instead of appending
+    // another row for it. See persistResolvedBook's onConflictDoUpdate.
+    unique("release_book_region_format_unique").on(t.bookId, t.region, t.format),
+  ],
 );
 
 export const releaseSources = pgTable("release_sources", {
