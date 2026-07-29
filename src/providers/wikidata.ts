@@ -40,7 +40,8 @@ function bindingValue(binding: Record<string, unknown>, key: string): string | u
 
 function entriesQuery(seriesQid: string): string {
   return `
-    SELECT ?book ?bookLabel ?ordinal ?pubDate ?precision WHERE {
+    SELECT ?book ?bookLabel ?ordinal ?pubDate ?precision ?seriesLabel WHERE {
+      BIND(wd:${seriesQid} AS ?series)
       ?book p:P179 ?membership .
       ?membership ps:P179 wd:${seriesQid} .
       OPTIONAL { ?membership pq:P1545 ?ordinal . }
@@ -82,12 +83,14 @@ function toProviderBook(binding: Record<string, unknown>): ProviderBook | null {
   const rawDate = bindingValue(binding, "pubDate");
   const ordinal = bindingValue(binding, "ordinal");
   const authorLabel = bindingValue(binding, "authorLabel");
+  const seriesLabel = bindingValue(binding, "seriesLabel");
 
   return {
     provider: "wikidata",
     externalId: qidFromUri(bookUri),
     title,
     authors: authorLabel ? [authorLabel] : [],
+    seriesName: seriesLabel,
     seriesPosition: ordinal ? Number(ordinal) : undefined,
     releaseDate: rawDate ? rawDate.slice(0, 10) : undefined,
     datePrecision: rawDate

@@ -141,7 +141,34 @@ async function findExistingBookId(
   return existing[0]?.entityId ?? null;
 }
 
+// A book's seriesExternalId is only trustworthy alongside the provider that
+// supplied it (recorded in provenance.seriesExternalId by the trust
+// matrix). Without that provider we cannot form a (provider, externalId)
+// pair to look up, so the external-id path is skipped entirely and title
+// matching is used instead.
+async function findSeriesIdByExternalId(book: ResolvedBook): Promise<string | null> {
+  const provider = book.provenance.seriesExternalId;
+  if (!book.seriesExternalId || !provider) return null;
+
+  const existing = await db
+    .select({ entityId: externalIds.entityId })
+    .from(externalIds)
+    .where(
+      and(
+        eq(externalIds.entityType, "series"),
+        eq(externalIds.provider, provider),
+        eq(externalIds.externalId, book.seriesExternalId),
+      ),
+    )
+    .limit(1);
+
+  return existing[0]?.entityId ?? null;
+}
+
 async function upsertSeries(book: ResolvedBook): Promise<string | null> {
+  const byExternalId = await findSeriesIdByExternalId(book);
+  if (byExternalId) return byExternalId;
+
   if (!book.seriesName) return null;
 
   // Insert first and rely on the unique constraint on series.title to
@@ -159,7 +186,26 @@ async function upsertSeries(book: ResolvedBook): Promise<string | null> {
     .where(eq(series.title, book.seriesName))
     .limit(1);
 
-  return existing[0]?.id ?? null;
+  const seriesId = existing[0]?.id ?? null;
+
+  // Record the external id now so the next sighting of this series (even
+  // under a different title) resolves by id instead of by title.
+  const provider = book.provenance.seriesExternalId;
+  if (seriesId && book.seriesExternalId && provider) {
+    await db
+      .insert(externalIds)
+      .values([
+        {
+          entityType: "series",
+          entityId: seriesId,
+          provider,
+          externalId: book.seriesExternalId,
+        },
+      ])
+      .onConflictDoNothing();
+  }
+
+  return seriesId;
 }
 
 export async function persistResolvedBook(
@@ -169,9 +215,38 @@ export async function persistResolvedBook(
 
   const existingBookId = await findExistingBookId(book.sources);
 
-  const bookId =
-    existingBookId ??
-    (
+  let bookId: string;
+  if (existingBookId) {
+    bookId = existingBookId;
+
+    // A second sighting enriches the record: only overwrite a column when
+    // the incoming value is present, so a provider that omits a field (or
+    // simply doesn't carry it) cannot blank data another provider supplied.
+    // seriesId is the exception worth calling out: it is only filled in
+    // when the book was not already linked to a series, never overwritten
+    // once set.
+    const existingSeries = await db
+      .select({ seriesId: books.seriesId })
+      .from(books)
+      .where(eq(books.id, existingBookId))
+      .limit(1);
+    const currentSeriesId = existingSeries[0]?.seriesId ?? null;
+
+    const updateSet: Partial<typeof books.$inferInsert> = {};
+    if (book.title) updateSet.title = book.title;
+    if (book.isbn13) updateSet.isbn13 = book.isbn13;
+    if (book.coverUrl) updateSet.coverUrl = book.coverUrl;
+    if (book.description) updateSet.description = book.description;
+    if (book.seriesPosition !== undefined) {
+      updateSet.seriesPosition = book.seriesPosition.toString();
+    }
+    if (seriesId && !currentSeriesId) updateSet.seriesId = seriesId;
+
+    if (Object.keys(updateSet).length > 0) {
+      await db.update(books).set(updateSet).where(eq(books.id, existingBookId));
+    }
+  } else {
+    bookId = (
       await db
         .insert(books)
         .values({
@@ -184,6 +259,7 @@ export async function persistResolvedBook(
         })
         .returning({ id: books.id })
     )[0].id;
+  }
 
   await upsertAuthors(bookId, book.authors);
 

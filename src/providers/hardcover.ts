@@ -190,12 +190,15 @@ export const hardcoverProvider: MetadataProvider = {
       .map((entry) => asRecord(entry))
       .filter((entry): entry is Record<string, unknown> => entry !== null);
 
+    const seriesName = asString(series.name);
+
     return entries
       .map((entry): ProviderBook | null => {
         const mapped = toProviderBook(entry.book);
         if (!mapped) return null;
         return {
           ...mapped,
+          seriesName,
           seriesExternalId: externalId,
           seriesPosition: asNumber(entry.position),
         };

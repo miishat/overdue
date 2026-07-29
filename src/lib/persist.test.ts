@@ -175,6 +175,309 @@ describe("persistResolvedBook dedup", () => {
   });
 });
 
+describe("persistResolvedBook series linkage", () => {
+  it("persists a discovered book with a series name with a non-null seriesId", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock({ books, series, releases, releaseSources, externalIds }, state),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    state.externalIdsQueue.push([]);
+    const result = await persistResolvedBook({
+      key: "isbn:series-link",
+      title: "Book With Series",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-link-1" }],
+      confidence: 90,
+      seriesName: "Some New Series",
+    });
+
+    expect(result.seriesId).not.toBeNull();
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("enriches an existing book with a cover and series on a second sighting without creating a duplicate", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock({ books, series, releases, releaseSources, externalIds }, state),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const baseBook = {
+      key: "isbn:enrich",
+      title: "Enrich Me",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-enrich" }],
+      confidence: 90,
+    };
+
+    state.externalIdsQueue.push([]);
+    const first = await persistResolvedBook(baseBook);
+
+    state.externalIdsQueue.push([{ entityId: first.bookId }]);
+    const second = await persistResolvedBook({
+      ...baseBook,
+      coverUrl: "https://covers.example/enrich.jpg",
+      seriesName: "Enrich Series",
+    });
+
+    expect(state.bookInsertCount).toBe(1);
+    expect(second.bookId).toBe(first.bookId);
+    expect(second.seriesId).not.toBeNull();
+    expect(state.singleBook?.coverUrl).toBe("https://covers.example/enrich.jpg");
+    expect(state.singleBook?.seriesId).toBe(second.seriesId);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("does not blank a field that a later sighting omits", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock({ books, series, releases, releaseSources, externalIds }, state),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const baseBook = {
+      key: "isbn:keep-description",
+      title: "Keep My Description",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-keep" }],
+      confidence: 90,
+      description: "A great book about things.",
+    };
+
+    state.externalIdsQueue.push([]);
+    const first = await persistResolvedBook(baseBook);
+
+    state.externalIdsQueue.push([{ entityId: first.bookId }]);
+    await persistResolvedBook({
+      ...baseBook,
+      description: undefined,
+    });
+
+    expect(state.singleBook?.description).toBe("A great book about things.");
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("matches a series by external id across sightings under different titles", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock({ books, series, releases, releaseSources, externalIds }, state),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const bookA = {
+      key: "isbn:series-ext-a",
+      title: "Book A",
+      authors: [],
+      provenance: { seriesExternalId: "hardcover" as const },
+      sources: [{ provider: "hardcover" as const, externalId: "hc-ext-a" }],
+      confidence: 90,
+      seriesName: "Series Title A",
+      seriesExternalId: "77",
+    };
+    const bookB = {
+      key: "isbn:series-ext-b",
+      title: "Book B",
+      authors: [],
+      provenance: { seriesExternalId: "hardcover" as const },
+      sources: [{ provider: "hardcover" as const, externalId: "hc-ext-b" }],
+      confidence: 90,
+      seriesName: "Series Title B",
+      seriesExternalId: "77",
+    };
+
+    state.externalIdsQueue.push([], []);
+    const first = await persistResolvedBook(bookA);
+
+    state.externalIdsQueue.push([{ entityId: state.singleSeries?.id }], []);
+    const second = await persistResolvedBook(bookB);
+
+    expect(first.seriesId).not.toBeNull();
+    expect(second.seriesId).toBe(first.seriesId);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+});
+
+// State and mock for the series-linkage / enrichment tests above. Unlike
+// makeStatefulDbMock, this tracks a single book row and a single series row
+// directly (each test only ever has one of each in flight at a time), and
+// drives the two possible external_ids lookups per persist call (series by
+// external id, then book by external id) off an explicit FIFO queue that
+// each test primes before every persistResolvedBook call, since the mock
+// cannot introspect the real drizzle where-clause to tell them apart.
+function makeSingleEntityState() {
+  return {
+    externalIdsQueue: [] as { entityId: string }[][],
+    bookInsertCount: 0,
+    seriesInsertCount: 0,
+    singleBook: null as
+      | {
+          id: string;
+          title?: string;
+          isbn13?: string;
+          coverUrl?: string;
+          description?: string;
+          seriesId: string | null;
+        }
+      | null,
+    singleSeries: null as { id: string; title: string } | null,
+    seriesByTitle: new Map<string, string>(),
+    lastSeriesInsertTitle: null as string | null,
+    updateCalls: [] as Record<string, unknown>[],
+  };
+}
+
+function makeSingleEntityDbMock(
+  tables: {
+    books: unknown;
+    series: unknown;
+    releases: unknown;
+    releaseSources: unknown;
+    externalIds: unknown;
+  },
+  state: ReturnType<typeof makeSingleEntityState>,
+) {
+  const select = () => ({
+    from: (table: unknown) => ({
+      where: () => ({
+        limit: async () => {
+          if (table === tables.externalIds) return state.externalIdsQueue.shift() ?? [];
+          if (table === tables.series) {
+            const title = state.lastSeriesInsertTitle;
+            const id = title ? state.seriesByTitle.get(title) : undefined;
+            return id ? [{ id }] : [];
+          }
+          if (table === tables.books) {
+            return state.singleBook ? [{ seriesId: state.singleBook.seriesId }] : [];
+          }
+          return [];
+        },
+      }),
+    }),
+  });
+
+  const insert = (table: unknown) => ({
+    values: (rows: unknown) => ({
+      then: (resolve: (value: undefined) => void) => resolve(undefined),
+      returning: async () => {
+        if (table === tables.books) {
+          state.bookInsertCount += 1;
+          const id = `book-${state.bookInsertCount}`;
+          const row = rows as {
+            title?: string;
+            isbn13?: string;
+            coverUrl?: string;
+            description?: string;
+            seriesId?: string | null;
+          };
+          state.singleBook = {
+            id,
+            title: row.title,
+            isbn13: row.isbn13,
+            coverUrl: row.coverUrl,
+            description: row.description,
+            seriesId: row.seriesId ?? null,
+          };
+          return [{ id }];
+        }
+        if (table === tables.releases) return [{ id: "release-1" }];
+        return [{ id: "row-1" }];
+      },
+      onConflictDoNothing: async () => {
+        if (table === tables.series) {
+          const row = rows as { title: string };
+          state.lastSeriesInsertTitle = row.title;
+          if (!state.seriesByTitle.has(row.title)) {
+            state.seriesInsertCount += 1;
+            const id = `series-${state.seriesInsertCount}`;
+            state.seriesByTitle.set(row.title, id);
+            state.singleSeries = { id, title: row.title };
+          }
+        }
+        return undefined;
+      },
+      onConflictDoUpdate: () => ({
+        returning: async () => {
+          if (table === tables.releases) return [{ id: "release-1" }];
+          return [{ id: "row-1" }];
+        },
+      }),
+    }),
+  });
+
+  const update = (table: unknown) => ({
+    set: (setObj: Record<string, unknown>) => ({
+      where: async () => {
+        if (table === tables.books && state.singleBook) {
+          state.updateCalls.push(setObj);
+          Object.assign(state.singleBook, setObj);
+        }
+        return undefined;
+      },
+    }),
+  });
+
+  const del = () => ({ where: async () => undefined });
+
+  return { select, insert, update, delete: del };
+}
+
 describe("persistResolvedBook status derivation", () => {
   it("computes sourceOfficial from provenance.releaseDate being hardcover, wikidata, or manual", async () => {
     vi.resetModules();
@@ -286,7 +589,9 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
 
   const del = () => ({ where: async () => undefined });
 
-  return { select, insert, delete: del };
+  const update = () => ({ set: () => ({ where: async () => undefined }) });
+
+  return { select, insert, delete: del, update };
 }
 
 // A stateful mock that tracks how many times `books` was inserted and
@@ -387,5 +692,7 @@ function makeStatefulDbMock(
     },
   });
 
-  return { select, insert, delete: del };
+  const update = () => ({ set: () => ({ where: async () => undefined }) });
+
+  return { select, insert, delete: del, update };
 }

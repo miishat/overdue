@@ -54,6 +54,16 @@ describe("hardcoverProvider", () => {
     expect(entries[1].releaseDate).toBeUndefined();
   });
 
+  it("populates seriesName on every discovered series entry", async () => {
+    server.use(http.post(ENDPOINT, () => HttpResponse.json(entriesFixture)));
+    const entries = await hardcoverProvider.getSeriesEntries("77");
+
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry.seriesName).toBe("The Stormlight Archive");
+    }
+  });
+
   it("returns an empty array when GraphQL reports errors", async () => {
     server.use(
       http.post(ENDPOINT, () =>

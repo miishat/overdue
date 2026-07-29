@@ -46,6 +46,16 @@ describe("wikidataProvider", () => {
     expect(entries[1].datePrecision).toBeUndefined();
   });
 
+  it("populates seriesName on every discovered series entry", async () => {
+    server.use(http.get(ENDPOINT, () => HttpResponse.json(fixture)));
+    const entries = await wikidataProvider.getSeriesEntries("Q45875");
+
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry.seriesName).toBe("A Song of Ice and Fire");
+    }
+  });
+
   it("returns an empty array when the endpoint errors", async () => {
     server.use(http.get(ENDPOINT, () => new HttpResponse(null, { status: 429 })));
     await expect(wikidataProvider.getSeriesEntries("Q1")).resolves.toEqual([]);
