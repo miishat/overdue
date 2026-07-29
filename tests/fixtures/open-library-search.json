@@ -1,0 +1,17 @@
+{
+  "docs": [
+    {
+      "key": "/works/OL123W",
+      "title": "The Way of Kings",
+      "author_name": ["Brandon Sanderson"],
+      "first_publish_year": 2010,
+      "cover_i": 8231856,
+      "isbn": ["9780765326355", "0765326353"]
+    },
+    {
+      "key": "/works/OL999W",
+      "title": "No Cover Here",
+      "author_name": ["Anon"]
+    }
+  ]
+}
