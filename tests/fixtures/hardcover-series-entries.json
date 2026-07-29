@@ -1,0 +1,30 @@
+{
+  "data": {
+    "series": [
+      {
+        "id": 77,
+        "name": "The Stormlight Archive",
+        "book_series": [
+          {
+            "position": 1,
+            "book": {
+              "id": 12345,
+              "title": "The Way of Kings",
+              "release_date": "2010-08-31",
+              "contributions": [{ "author": { "name": "Brandon Sanderson" } }]
+            }
+          },
+          {
+            "position": 6,
+            "book": {
+              "id": 99999,
+              "title": "Stormlight Archive, Book Six",
+              "release_date": null,
+              "contributions": [{ "author": { "name": "Brandon Sanderson" } }]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

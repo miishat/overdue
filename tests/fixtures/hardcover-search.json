@@ -1,0 +1,20 @@
+{
+  "data": {
+    "books": [
+      {
+        "id": 12345,
+        "title": "The Way of Kings",
+        "description": "Book one.",
+        "release_date": "2010-08-31",
+        "image": { "url": "https://hardcover.app/cover1.jpg" },
+        "contributions": [{ "author": { "name": "Brandon Sanderson" } }],
+        "book_series": [
+          {
+            "position": 1,
+            "series": { "id": 77, "name": "The Stormlight Archive" }
+          }
+        ]
+      }
+    ]
+  }
+}
