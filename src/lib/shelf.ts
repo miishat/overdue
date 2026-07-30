@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import type { DatePrecision, SeriesStatus } from "@/db/schema/enums";
 import { authors, bookAuthors, books, series } from "@/db/schema/catalog";
@@ -97,10 +97,26 @@ export function buildShelf(input: {
     if (synthetic) entries.push(synthetic);
   }
 
-  // COMPLETE never reaches the shelf. Filtering here as well as in
-  // synthesiseSeriesEntry covers a real book row belonging to a finished
-  // series, which the synthesiser never sees.
+  // Defensive only: deriveStatus returns COMPLETE solely when
+  // seriesStatus === "complete" && !hasBookRecord, and book rows above
+  // always pass hasBookRecord: true, so no book-row entry can reach this
+  // filter as COMPLETE. synthesiseSeriesEntry already returns null for a
+  // complete series, so this is unreachable given today's callers. Kept as
+  // a guard in case a future caller changes that invariant.
   return entries.filter((entry) => entry.status !== "COMPLETE");
+}
+
+/**
+ * A book is "tracked" either directly (a track row pointing at the book) or
+ * indirectly (a track row pointing at its series). Union the two id sets so
+ * a book reachable both ways still appears exactly once. Extracted as a pure
+ * function so this rule is unit-testable without a database.
+ */
+export function mergeTrackedBookIds(
+  directBookIds: string[],
+  seriesReachableBookIds: string[],
+): string[] {
+  return [...new Set([...directBookIds, ...seriesReachableBookIds])];
 }
 
 export async function loadShelf(
@@ -120,16 +136,53 @@ export async function loadShelf(
  *
  * highestKnownPosition is a clean SQL aggregate (MAX(books.seriesPosition)
  * grouped by series), so it is computed in SQL. lastSeriesReleaseAt and
- * sourceOfficial are harder to express as a single join without either
- * duplicating book rows (a book can have more than one release row across
- * region/format, and a release can have more than one release_sources row)
- * or writing a much less readable query, so per the brief's guidance those
- * two are fetched as small extra queries and reduced in TypeScript. Row
- * counts here are per-user and small (this is a single-user v1 app), so the
- * extra round trips are not a real cost.
+ * sourceOfficial are harder to express as a single join without a release
+ * having more than one release_sources row (one per provider) fanning out
+ * the book rows the join is trying to produce one-per-book, so per the
+ * brief's guidance those two are fetched as small extra queries and reduced
+ * in TypeScript. Row counts here are per-user and small (this is a
+ * single-user v1 app), so the extra round trips are not a real cost.
  */
 export const drizzleShelfSource: ShelfDataSource = {
   async trackedBooks(userId) {
+    // A book is tracked either directly (tracks.bookId) or through its
+    // series (tracks.seriesId). Tracking a series is the primary way
+    // anything gets tracked in this app, so both paths must be resolved and
+    // merged, or a series-tracked book's real releases never reach the
+    // shelf and the suppression rule below has nothing to suppress against.
+    const trackRows = await db
+      .select({ bookId: tracks.bookId, seriesId: tracks.seriesId })
+      .from(tracks)
+      .where(eq(tracks.userId, userId));
+
+    const directBookIds = trackRows
+      .map((row) => row.bookId)
+      .filter((id): id is string => id !== null);
+    const trackedSeriesIds = trackRows
+      .map((row) => row.seriesId)
+      .filter((id): id is string => id !== null);
+
+    const seriesReachableBookIds =
+      trackedSeriesIds.length === 0
+        ? []
+        : (
+            await db
+              .select({ bookId: books.id })
+              .from(books)
+              .where(inArray(books.seriesId, trackedSeriesIds))
+          ).map((row) => row.bookId);
+
+    const bookIds = mergeTrackedBookIds(directBookIds, seriesReachableBookIds);
+    if (bookIds.length === 0) return [];
+
+    // Pin the release join to the region/format persist.ts actually writes
+    // (see releases.ts defaults and persistResolvedBook) rather than
+    // leaving the join ambiguous. v1 never writes a second release row for
+    // a book, but the unique constraint is on (book_id, region, format), not
+    // on book_id alone, so an unconstrained join could in principle match
+    // more than one row and leave the "winning" one to database plan order.
+    // Pinning region/format makes at most one release row match per book,
+    // by construction, so no post-query dedup is needed.
     const rows = await db
       .select({
         bookId: books.id,
@@ -143,27 +196,19 @@ export const drizzleShelfSource: ShelfDataSource = {
         releaseDate: releases.date,
         precision: releases.datePrecision,
       })
-      .from(tracks)
-      .innerJoin(books, eq(tracks.bookId, books.id))
+      .from(books)
       .leftJoin(series, eq(books.seriesId, series.id))
-      .leftJoin(releases, eq(releases.bookId, books.id))
-      .where(and(eq(tracks.userId, userId), isNotNull(tracks.bookId)));
+      .leftJoin(
+        releases,
+        and(
+          eq(releases.bookId, books.id),
+          eq(releases.region, "US"),
+          eq(releases.format, "hardcover"),
+        ),
+      )
+      .where(inArray(books.id, bookIds));
 
-    // A book can carry more than one release row (region/format), though v1
-    // only ever writes US/hardcover. Reduce to one row per book here rather
-    // than push that ambiguity into the SQL, preferring a release that has a
-    // date over one that does not.
-    type Row = (typeof rows)[number];
-    const byBook = new Map<string, Row>();
-    for (const row of rows) {
-      const existing = byBook.get(row.bookId);
-      if (!existing || (row.releaseDate !== null && existing.releaseDate === null)) {
-        byBook.set(row.bookId, row);
-      }
-    }
-    const bookRows = [...byBook.values()];
-
-    const bookIds = bookRows.map((row) => row.bookId);
+    const bookRows = rows;
     const releaseIds = bookRows
       .map((row) => row.releaseId)
       .filter((id): id is string => id !== null);
@@ -204,7 +249,10 @@ export const drizzleShelfSource: ShelfDataSource = {
             .from(books)
             .innerJoin(releases, eq(releases.bookId, books.id))
             .where(
-              and(inArray(books.seriesId, seriesIds), eq(releases.status, "RELEASED")),
+              and(
+                inArray(books.seriesId, seriesIds),
+                lte(releases.date, sql`current_date`),
+              ),
             )
             .groupBy(books.seriesId),
     ]);
@@ -220,6 +268,14 @@ export const drizzleShelfSource: ShelfDataSource = {
       }
     }
 
+    // Diverges slightly from persistResolvedBook (persist.ts:283-287): that
+    // function also treats a release as official when provenance.releaseDate
+    // names an official provider, even if that provider's source row was
+    // never (or no longer) written. release_sources is the only signal
+    // available at read time, so a release whose source rows are all absent
+    // reads as unofficial (RUMORED) here even in the rare case persist.ts
+    // would have stored it as ANNOUNCED. Not fixed here per review guidance
+    // to avoid restructuring persist.ts's provenance handling.
     const officialByRelease = new Set(
       sourceRows
         .filter((row) => OFFICIAL_PROVIDERS[row.provider])
@@ -288,7 +344,10 @@ export const drizzleShelfSource: ShelfDataSource = {
         .from(books)
         .innerJoin(releases, eq(releases.bookId, books.id))
         .where(
-          and(inArray(books.seriesId, seriesIds), eq(releases.status, "RELEASED")),
+          and(
+            inArray(books.seriesId, seriesIds),
+            lte(releases.date, sql`current_date`),
+          ),
         )
         .groupBy(books.seriesId),
     ]);

@@ -7,7 +7,7 @@ import type { TrackedSeries } from "./synthesise";
 // touching a real database. See persist.test.ts for the same pattern.
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 
-const { buildShelf, loadShelf } = await import("./shelf");
+const { buildShelf, loadShelf, mergeTrackedBookIds } = await import("./shelf");
 type ShelfDataSource = import("./shelf").ShelfDataSource;
 type TrackedBookRow = import("./shelf").TrackedBookRow;
 
@@ -190,6 +190,50 @@ describe("buildShelf", () => {
 
   it("returns an empty shelf when nothing is tracked", () => {
     expect(buildShelf({ books: [], series: [], now: NOW })).toEqual([]);
+  });
+
+  // Tracking a whole series is the primary way anything gets tracked, and
+  // trackedBooks resolves those books through tracks.seriesId (see
+  // mergeTrackedBookIds below). buildShelf itself does not care how a book
+  // row reached it, but this pins the scenario the review flagged: a
+  // series-tracked series whose real book is still pending must suppress
+  // the synthetic entry, exactly like a directly-tracked book does.
+  it("suppresses the synthetic entry for a series tracked as a whole when one of its real books is pending", () => {
+    const entries = buildShelf({
+      books: [
+        book({
+          bookId: "b9",
+          seriesId: "s1",
+          releaseDate: null,
+          precision: null,
+          sourceOfficial: true,
+        }),
+      ],
+      series: [series()],
+      now: NOW,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].bookId).toBe("b9");
+    expect(entries[0].status).toBe("ANNOUNCED");
+    expect(entries.some((e) => e.synthetic)).toBe(false);
+  });
+});
+
+describe("mergeTrackedBookIds", () => {
+  it("unions direct book ids and series-reachable book ids", () => {
+    const result = mergeTrackedBookIds(["b1"], ["b2", "b3"]);
+    expect(new Set(result)).toEqual(new Set(["b1", "b2", "b3"]));
+  });
+
+  it("dedupes a book id reachable both directly and through its series", () => {
+    const result = mergeTrackedBookIds(["b1", "b2"], ["b2", "b3"]);
+    expect(result).toHaveLength(3);
+    expect(new Set(result)).toEqual(new Set(["b1", "b2", "b3"]));
+  });
+
+  it("returns an empty list when neither source has any ids", () => {
+    expect(mergeTrackedBookIds([], [])).toEqual([]);
   });
 });
 
