@@ -59,6 +59,18 @@ describe("dateChangesFrom", () => {
     expect(result).toEqual([]);
   });
 
+  it("excludes a row with a null provider, since a stamp needs a source", () => {
+    const result = dateChangesFrom([row({ provider: null })]);
+    expect(result).toEqual([]);
+  });
+
+  it("excludes a no-op change where old_value and new_value denote the same instant", () => {
+    const result = dateChangesFrom([
+      row({ oldValue: "2026-09-01", newValue: "2026-09-01T00:00:00Z" }),
+    ]);
+    expect(result).toEqual([]);
+  });
+
   it("orders results most recent first", () => {
     const earlier = row({
       id: "row-earlier",

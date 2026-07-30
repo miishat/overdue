@@ -79,8 +79,13 @@ export default async function BookDetailPage({
               >
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="font-display text-[15px] text-body">
-                    {release.date && release.precision
-                      ? formatImprecise(release.date, release.precision)
+                    {release.date
+                      ? // date and precision are independently nullable
+                        // (src/db/schema/releases.ts), so a real date with an
+                        // unknown precision must still render as a date.
+                        // Falling back to "year" rather than "day" avoids
+                        // asserting a confidence no source actually gave.
+                        formatImprecise(release.date, release.precision ?? "year")
                       : "No date"}
                   </span>
                   <span className="font-mono text-[11px] uppercase text-quiet">
@@ -121,6 +126,10 @@ export default async function BookDetailPage({
                   key={`${change.observedAt.toISOString()}-${index}`}
                   className="border-b border-rule py-2 last:border-b-0"
                 >
+                  <p className="font-display text-[14px] text-body">
+                    {formatImprecise(change.from, "day")} to{" "}
+                    {formatImprecise(change.to, "day")}
+                  </p>
                   <ProvenanceStamp
                     provider={change.provider}
                     lastVerifiedAt={change.observedAt}

@@ -3,7 +3,7 @@ import { db } from "@/db/client";
 import { authors, bookAuthors, books } from "@/db/schema/catalog";
 import { changeLog } from "@/db/schema/changelog";
 import { releases, releaseSources } from "@/db/schema/releases";
-import type { DatePrecision, ProviderName, ReleaseStatus } from "@/db/schema/enums";
+import type { DatePrecision, ProviderName } from "@/db/schema/enums";
 import { dateChangesFrom, type ChangeLogRow, type DateChange } from "./changes";
 
 export interface ReleaseSourceRow {
@@ -18,7 +18,6 @@ export interface ReleaseRow {
   format: string;
   date: Date | null;
   precision: DatePrecision | null;
-  status: ReleaseStatus;
   sources: ReleaseSourceRow[];
 }
 
@@ -86,7 +85,6 @@ export const drizzleBookDetailSource: BookDetailDataSource = {
           format: releases.format,
           date: releases.date,
           precision: releases.datePrecision,
-          status: releases.status,
         })
         .from(releases)
         .where(eq(releases.bookId, bookId)),
@@ -155,7 +153,6 @@ export const drizzleBookDetailSource: BookDetailDataSource = {
         format: row.format,
         date: row.date ? new Date(row.date) : null,
         precision: row.precision,
-        status: row.status,
         sources: sourcesByRelease.get(row.id) ?? [],
       })),
       changes: dateChangesFrom(changeLogRows),

@@ -31,7 +31,13 @@ describe("ProvenanceStamp", () => {
       />,
     );
     expect(screen.getByText("MOVED +3W")).toBeTruthy();
-    expect(container.querySelector('[data-move-token="oxide"]')).toBeTruthy();
+    const el = container.querySelector('[data-move-token="oxide"]');
+    expect(el).toBeTruthy();
+    // Pin the actual class, not just the test-only data attribute: the
+    // colour the user sees comes from className, so the attribute alone
+    // could desync from it and this test would still pass.
+    expect(el?.className).toContain("text-oxide");
+    expect(el?.className).not.toContain("text-verdigris");
   });
 
   it("renders an earlier move in the verdigris token", () => {
@@ -44,9 +50,10 @@ describe("ProvenanceStamp", () => {
       />,
     );
     expect(screen.getByText("MOVED -2W")).toBeTruthy();
-    expect(
-      container.querySelector('[data-move-token="verdigris"]'),
-    ).toBeTruthy();
+    const el = container.querySelector('[data-move-token="verdigris"]');
+    expect(el).toBeTruthy();
+    expect(el?.className).toContain("text-verdigris");
+    expect(el?.className).not.toContain("text-oxide");
   });
 
   it("renders the stamp in the mono font", () => {
