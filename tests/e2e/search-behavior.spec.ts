@@ -14,7 +14,7 @@ test("a settled two-character query triggers exactly one search request", async 
     });
   });
 
-  await page.goto("/");
+  await page.goto("/search");
   await page.getByLabel("Search for a book or author").fill("ha");
 
   // Wait past the 300ms debounce for the request to fire.
@@ -33,7 +33,7 @@ test("a no-match search offers the manual entry form", async ({ page }) => {
     });
   });
 
-  await page.goto("/");
+  await page.goto("/search");
   await page.getByLabel("Search for a book or author").fill("zzzznomatch");
 
   await expect(page.getByLabel("Title")).toBeVisible();

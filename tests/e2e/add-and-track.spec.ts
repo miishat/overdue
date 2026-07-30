@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("the home page offers a search box", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/search");
   await expect(
     page.getByRole("heading", { name: "Add something to track" }),
   ).toBeVisible();
@@ -11,7 +11,7 @@ test("the home page offers a search box", async ({ page }) => {
 test("typing a single character does not trigger a search", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/search");
   const requests: string[] = [];
   page.on("request", (r) => {
     if (r.url().includes("/api/search")) requests.push(r.url());
