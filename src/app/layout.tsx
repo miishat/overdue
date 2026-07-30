@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { NavShell } from "@/components/nav/NavShell";
 import { fontVariables } from "@/lib/fonts";
 import "./globals.css";
 
@@ -18,7 +19,9 @@ export default function RootLayout({
       data-scheme="dark"
       className={`${fontVariables} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <NavShell>{children}</NavShell>
+      </body>
     </html>
   );
 }
