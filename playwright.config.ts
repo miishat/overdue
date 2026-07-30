@@ -1,4 +1,14 @@
+import { loadEnvConfig } from "@next/env";
 import { defineConfig } from "@playwright/test";
+
+// The Playwright test-runner process does not get .env.local the way the
+// spawned `pnpm dev` webServer does (Next loads it internally for that
+// child process only). tests/e2e/fixtures/seed-states.ts talks to the
+// database directly from the runner process, so it needs the same
+// DATABASE_URL. @next/env is Next's own, officially supported loader for
+// use outside the Next runtime, so it is used here rather than a hand
+// rolled .env parser.
+loadEnvConfig(process.cwd());
 
 export default defineConfig({
   testDir: "./tests/e2e",
