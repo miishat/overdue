@@ -111,10 +111,34 @@ describe("formatElapsed", () => {
 });
 
 describe("formatImprecise", () => {
-  it("renders a season as a season name and year", () => {
-    expect(
-      formatImprecise(new Date("2027-09-01T00:00:00Z"), "season"),
-    ).toBe("Fall 2027");
+  describe("season precision covers all twelve months", () => {
+    const seasonTests = [
+      { monthIdx: 0, month: "January", season: "Winter" },
+      { monthIdx: 1, month: "February", season: "Winter" },
+      { monthIdx: 2, month: "March", season: "Spring" },
+      { monthIdx: 3, month: "April", season: "Spring" },
+      { monthIdx: 4, month: "May", season: "Spring" },
+      { monthIdx: 5, month: "June", season: "Summer" },
+      { monthIdx: 6, month: "July", season: "Summer" },
+      { monthIdx: 7, month: "August", season: "Summer" },
+      { monthIdx: 8, month: "September", season: "Fall" },
+      { monthIdx: 9, month: "October", season: "Fall" },
+      { monthIdx: 10, month: "November", season: "Fall" },
+      { monthIdx: 11, month: "December", season: "Winter" },
+    ];
+
+    seasonTests.forEach(({ monthIdx, month, season }) => {
+      it(`renders ${month} (index ${monthIdx}) as ${season}`, () => {
+        const date = new Date(`2027-${String(monthIdx + 1).padStart(2, "0")}-01T00:00:00Z`);
+        expect(formatImprecise(date, "season")).toBe(`${season} 2027`);
+      });
+    });
+  });
+
+  it("renders a season with a December date using its stored year, not the calendar year of the season", () => {
+    expect(formatImprecise(new Date("2027-12-01T00:00:00Z"), "season")).toBe(
+      "Winter 2027",
+    );
   });
 
   it("renders a quarter as Q and year", () => {

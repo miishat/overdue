@@ -77,6 +77,14 @@ export function formatElapsed(from: Date, now: Date): string {
   return `${months} mo`;
 }
 
+/**
+ * Season storage convention: seasons are stored on their first month in the
+ * Northern Hemisphere. Winter starts December (11), Spring starts March (2),
+ * Summer starts June (5), Fall starts September (8). The lookup table below
+ * maps month indices to these season starts. This is deliberate and differs
+ * from a simple calendar-quarter division, which would incorrectly split
+ * seasons across month boundaries. See formatImprecise().
+ */
 const SEASONS: Record<number, string> = {
   0: "Winter",
   2: "Spring",
