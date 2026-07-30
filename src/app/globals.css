@@ -4,6 +4,11 @@
  * Dark is the default scheme, so the dark values live on :root and light is
  * the override. This means an unstyled or pre-hydration render is dark rather
  * than flashing white.
+ *
+ * The values below must match src/lib/tokens.ts, which is the single source
+ * of truth for the palette. src/app/globals.test.ts parses this file and
+ * asserts it matches PALETTE exactly, so editing either file without the
+ * other fails a test.
  */
 :root {
   --ink: #0D0E10;
