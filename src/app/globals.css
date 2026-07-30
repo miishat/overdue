@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
+/*
+ * Dark is the default scheme, so the dark values live on :root and light is
+ * the override. This means an unstyled or pre-hydration render is dark rather
+ * than flashing white.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0D0E10;
+  --leaf: #16181B;
+  --rule: #2B2E33;
+  --body: #E6E4DF;
+  --quiet: #8A8D93;
+  --verdigris: #5F8C7D;
+  --oxide: #D99A2B;
+}
+
+[data-scheme="light"] {
+  --ink: #F2F3F1;
+  --leaf: #FFFFFF;
+  --rule: #DCDEDA;
+  --body: #16181B;
+  --quiet: #6B6F73;
+  --verdigris: #3F6357;
+  --oxide: #8A5A12;
+}
+
+/*
+ * The font variables themselves are set on <html> by next/font in
+ * src/lib/fonts.ts (--font-newsreader, --font-instrument, --font-mono).
+ * These aliases give the display and UI faces role names, so a component
+ * asks for the display face rather than naming a typeface it should not
+ * know about. IBM Plex Mono's next/font variable is already named
+ * --font-mono, so it needs no alias here; aliasing it to itself would be a
+ * self-referential custom property and resolve to nothing.
+ */
+:root {
+  --font-display: var(--font-newsreader);
+  --font-ui: var(--font-instrument);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-ink: var(--ink);
+  --color-leaf: var(--leaf);
+  --color-rule: var(--rule);
+  --color-body: var(--body);
+  --color-quiet: var(--quiet);
+  --color-verdigris: var(--verdigris);
+  --color-oxide: var(--oxide);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-display);
+  --font-ui: var(--font-ui);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ink);
+  color: var(--body);
+  font-family: var(--font-ui), system-ui, sans-serif;
+}
+
+/*
+ * Focus rings use verdigris, which the spec reserves for provenance and focus
+ * only. :focus-visible rather than :focus so a mouse click does not ring.
+ */
+:focus-visible {
+  outline: 2px solid var(--verdigris);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
