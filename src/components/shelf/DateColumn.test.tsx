@@ -1,10 +1,12 @@
 /**
  * @vitest-environment jsdom
  */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ShelfEntry } from "@/lib/synthesise";
 import { DateColumn } from "./DateColumn";
+
+afterEach(() => cleanup());
 
 const NOW = new Date("2026-07-29T00:00:00Z");
 
