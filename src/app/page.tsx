@@ -1,22 +1,14 @@
-"use client";
+import { WaitingShelf } from "@/components/shelf/WaitingShelf";
+import { drizzleShelfSource, loadShelf } from "@/lib/shelf";
 
-import { useState } from "react";
-import { SearchBox } from "@/components/SearchBox";
-import { TrackPrompt } from "@/components/TrackPrompt";
-import type { ResolvedBook } from "@/resolution/resolve";
-
-export default function HomePage() {
-  const [selected, setSelected] = useState<ResolvedBook | null>(null);
+export default async function Home() {
+  const now = new Date();
+  const entries = await loadShelf(drizzleShelfSource, now);
 
   return (
-    <main className="mx-auto flex max-w-xl flex-col gap-6 px-6 py-10">
-      <h1 className="font-[family-name:var(--font-newsreader)] text-2xl">
-        Add something to track
-      </h1>
-      <SearchBox onSelect={setSelected} />
-      {selected ? (
-        <TrackPrompt book={selected} onDone={() => setSelected(null)} />
-      ) : null}
+    <main className="mx-auto max-w-3xl px-4 py-8">
+      <h1 className="mb-6 font-display text-[26px] text-body">Waiting</h1>
+      <WaitingShelf entries={entries} now={now} />
     </main>
   );
 }
