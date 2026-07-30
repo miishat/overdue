@@ -105,6 +105,16 @@ export async function loadSeriesDetail(
  * scopes books to a single seriesId directly: the detail screen shows the
  * full real run of the series regardless of which of its books happen to be
  * individually tracked.
+ *
+ * No user scoping: this deliberately does not check that the current user
+ * tracks the requested seriesId, so any valid series id in the URL renders.
+ * That is fine today because v1 has no real authentication (see
+ * getCurrentUserId in src/lib/current-user.ts, a hardcoded single user) and
+ * the whole deployment sits behind proxy.ts's shared secret. It stops being
+ * fine the moment real auth is added, since at that point one user could
+ * reach another user's tracking data by guessing a series id. When that
+ * happens, thread scoping through here from getCurrentUserId, the single
+ * identity choke point.
  */
 export const drizzleSeriesDetailSource: SeriesDetailDataSource = {
   async seriesById(seriesId) {
