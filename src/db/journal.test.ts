@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import journal from "../../drizzle/meta/_journal.json";
@@ -33,5 +33,21 @@ describe("migration journal", () => {
       const sqlPath = path.join(migrationsDir, `${entry.tag}.sql`);
       expect(existsSync(sqlPath), `missing migration file for tag "${entry.tag}"`).toBe(true);
     }
+  });
+
+  // The check above only proves every journal tag has a file. It says
+  // nothing about a file that has no journal entry: drizzle-kit has
+  // silently skipped a migration before because it trusts the journal, not
+  // a directory scan, to know which migrations exist. A trailing entry can
+  // be removed from the journal while its .sql file stays on disk, and the
+  // three checks above stay green because they only ever walk forward from
+  // the journal. This check walks the other direction: from disk to journal.
+  it("has a journal entry for every .sql file on disk", () => {
+    const filesOnDisk = readdirSync(migrationsDir)
+      .filter((name) => name.endsWith(".sql"))
+      .map((name) => name.replace(/\.sql$/, ""))
+      .sort();
+    const tagsInJournal = entries.map((e) => e.tag).sort();
+    expect(filesOnDisk).toEqual(tagsInJournal);
   });
 });

@@ -8,5 +8,6 @@ describe("books", () => {
     const column = config.columns.find((c) => c.name === "last_refreshed_at");
     expect(column).toBeDefined();
     expect(column?.notNull).toBe(false);
+    expect(column?.columnType).toBe("PgTimestamp");
   });
 });

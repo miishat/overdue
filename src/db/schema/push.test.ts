@@ -34,9 +34,24 @@ describe("pushSubscriptions", () => {
     expect(columnsByKey.last_failure_at?.notNull).toBe(false);
   });
 
+  it("stores timestamps as timestamp columns", () => {
+    expect(columnsByKey.created_at?.columnType).toBe("PgTimestamp");
+    expect(columnsByKey.last_success_at?.columnType).toBe("PgTimestamp");
+    expect(columnsByKey.last_failure_at?.columnType).toBe("PgTimestamp");
+  });
+
   it("defaults failureCount to 0", () => {
     expect(columnsByKey.failure_count?.notNull).toBe(true);
     expect(columnsByKey.failure_count?.default).toBe(0);
+  });
+
+  it("cascades user deletion to their push subscriptions", () => {
+    const fk = config.foreignKeys.find((f) => f.getName() === "push_subscriptions_user_id_users_id_fk");
+    expect(fk).toBeDefined();
+    expect(fk?.onDelete).toBe("cascade");
+    const ref = fk?.reference();
+    expect(ref?.columns.map((c) => c.name)).toEqual(["user_id"]);
+    expect(ref?.foreignColumns.map((c) => c.name)).toEqual(["id"]);
   });
 
   it("prevents re-subscribing a device from duplicating rows", () => {
@@ -68,6 +83,20 @@ describe("notificationQueue", () => {
     expect(columnsByKey.payload?.notNull).toBe(true);
   });
 
+  it("stores timestamps as timestamp columns", () => {
+    expect(columnsByKey.created_at?.columnType).toBe("PgTimestamp");
+    expect(columnsByKey.sent_at?.columnType).toBe("PgTimestamp");
+  });
+
+  it("cascades user deletion to their queued notifications", () => {
+    const fk = config.foreignKeys.find((f) => f.getName() === "notification_queue_user_id_users_id_fk");
+    expect(fk).toBeDefined();
+    expect(fk?.onDelete).toBe("cascade");
+    const ref = fk?.reference();
+    expect(ref?.columns.map((c) => c.name)).toEqual(["user_id"]);
+    expect(ref?.foreignColumns.map((c) => c.name)).toEqual(["id"]);
+  });
+
   it("indexes unsent notifications by user", () => {
     const index = config.indexes.find(
       (i) => i.config.name === "notification_queue_unsent_idx",
@@ -86,5 +115,6 @@ describe("users", () => {
     const column = config.columns.find((c) => c.name === "last_shelf_viewed_at");
     expect(column).toBeDefined();
     expect(column?.notNull).toBe(false);
+    expect(column?.columnType).toBe("PgTimestamp");
   });
 });
