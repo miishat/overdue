@@ -5,15 +5,25 @@ interface UnsubscribeRequest {
   endpoint: string;
 }
 
+/**
+ * Narrowing guard rather than a cast, matching the pattern used by
+ * isSubscriptionInput for the subscribe route.
+ */
+function isUnsubscribeRequest(value: unknown): value is UnsubscribeRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.endpoint === "string" && candidate.endpoint.length > 0;
+}
+
 export async function POST(request: Request): Promise<Response> {
-  let body: Partial<UnsubscribeRequest>;
+  let body: unknown;
   try {
-    body = (await request.json()) as Partial<UnsubscribeRequest>;
+    body = await request.json();
   } catch {
     return Response.json({ error: "Malformed JSON body" }, { status: 400 });
   }
 
-  if (typeof body.endpoint !== "string" || body.endpoint.length === 0) {
+  if (!isUnsubscribeRequest(body)) {
     return Response.json({ error: "endpoint is required" }, { status: 400 });
   }
 

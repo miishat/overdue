@@ -85,4 +85,26 @@ describe("POST /api/push/subscribe", () => {
     expect(json).not.toHaveProperty("p256dh");
     expect(json).not.toHaveProperty("auth");
   });
+
+  it("accepts a body with userAgent omitted entirely and stores it as null", async () => {
+    upsert.mockClear();
+    const withoutUserAgent = {
+      endpoint: validSubscription.endpoint,
+      p256dh: validSubscription.p256dh,
+      auth: validSubscription.auth,
+    };
+    const res = await post(withoutUserAgent);
+
+    expect(res.status).toBe(200);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith("u1", { ...withoutUserAgent, userAgent: null });
+  });
+
+  it("rejects an empty-string endpoint", async () => {
+    upsert.mockClear();
+    const res = await post({ ...validSubscription, endpoint: "" });
+
+    expect(res.status).toBe(400);
+    expect(upsert).not.toHaveBeenCalled();
+  });
 });

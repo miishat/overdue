@@ -9,9 +9,10 @@ import { describe, expect, it, beforeAll } from "vitest";
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 
 let isSubscriptionInput: typeof import("./subscriptions").isSubscriptionInput;
+let buildUpsertStatement: typeof import("./subscriptions").buildUpsertStatement;
 
 beforeAll(async () => {
-  ({ isSubscriptionInput } = await import("./subscriptions"));
+  ({ isSubscriptionInput, buildUpsertStatement } = await import("./subscriptions"));
 });
 
 const valid = {
@@ -30,23 +31,37 @@ describe("isSubscriptionInput", () => {
     expect(isSubscriptionInput({ ...valid, userAgent: null })).toBe(true);
   });
 
+  it("accepts an omitted userAgent and normalises it to null", () => {
+    const candidate: Record<string, unknown> = {
+      endpoint: valid.endpoint,
+      p256dh: valid.p256dh,
+      auth: valid.auth,
+    };
+    expect(isSubscriptionInput(candidate)).toBe(true);
+    expect(candidate.userAgent).toBeNull();
+  });
+
   it("rejects a numeric userAgent", () => {
     expect(isSubscriptionInput({ ...valid, userAgent: 123 })).toBe(false);
   });
 
   it("rejects a missing endpoint", () => {
-    const { endpoint: _endpoint, ...rest } = valid;
+    const rest = { p256dh: valid.p256dh, auth: valid.auth, userAgent: valid.userAgent };
     expect(isSubscriptionInput(rest)).toBe(false);
   });
 
   it("rejects a missing p256dh", () => {
-    const { p256dh: _p256dh, ...rest } = valid;
+    const rest = { endpoint: valid.endpoint, auth: valid.auth, userAgent: valid.userAgent };
     expect(isSubscriptionInput(rest)).toBe(false);
   });
 
   it("rejects a missing auth", () => {
-    const { auth: _auth, ...rest } = valid;
+    const rest = { endpoint: valid.endpoint, p256dh: valid.p256dh, userAgent: valid.userAgent };
     expect(isSubscriptionInput(rest)).toBe(false);
+  });
+
+  it("rejects an empty-string endpoint", () => {
+    expect(isSubscriptionInput({ ...valid, endpoint: "" })).toBe(false);
   });
 
   it("rejects a non-string field", () => {
@@ -63,5 +78,56 @@ describe("isSubscriptionInput", () => {
     expect(isSubscriptionInput("not an object")).toBe(false);
     expect(isSubscriptionInput(42)).toBe(false);
     expect(isSubscriptionInput(undefined)).toBe(false);
+  });
+});
+
+// These assert on the SQL that drizzleSubscriptionStore.upsert actually
+// issues, built through the same buildUpsertStatement the store calls, via
+// drizzle's `.toSQL()`. Nothing here connects to a database: `.toSQL()`
+// compiles the statement without executing it. That is what closes the
+// coverage gap the review flagged: the route tests replace the whole store
+// with a fake, so no line of the real Drizzle upsert ever ran under test,
+// and a reviewer-mutated conflict clause (dropping the failureCount and
+// lastFailureAt resets, or repointing the conflict target at the wrong
+// column) passed the full suite anyway. Values below are obvious sentinels,
+// not realistic-looking keys, so nothing here could be mistaken for a real
+// secret if it ever showed up in test output.
+describe("drizzleSubscriptionStore upsert statement", () => {
+  const userId = "11111111-1111-1111-1111-111111111111";
+  const input = {
+    endpoint: "https://push.example.com/sql-check",
+    p256dh: "SENTINEL_P256DH",
+    auth: "SENTINEL_AUTH",
+    userAgent: null,
+  };
+
+  it("targets the endpoint unique constraint for the conflict clause", () => {
+    const { sql } = buildUpsertStatement(userId, input).toSQL();
+
+    // The real constraint is push_subscription_endpoint_unique, defined in
+    // src/db/schema/push.ts as unique(...).on(t.endpoint). Drizzle compiles
+    // a single-column target to the column name itself.
+    expect(sql).toMatch(/on conflict \("endpoint"\) do update/i);
+  });
+
+  it("resets failure health (failureCount to 0, lastFailureAt to null) on conflict", () => {
+    const { sql, params } = buildUpsertStatement(userId, input).toSQL();
+
+    expect(sql).toMatch(/"failure_count" = \$\d+/);
+    expect(sql).toMatch(/"last_failure_at" = \$\d+/);
+
+    // The reviewer's mutation removed these two assignments entirely, which
+    // a substring check on the SQL text alone already catches. This also
+    // confirms the bound values are the reset values, not carried-over
+    // input, so a mutation that keeps the assignment but binds the wrong
+    // value would fail too.
+    expect(params).toContain(0);
+    expect(params.filter((p) => p === null).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not target the userId column for the conflict clause", () => {
+    const { sql } = buildUpsertStatement(userId, input).toSQL();
+
+    expect(sql).not.toMatch(/on conflict \("user_id"\)/i);
   });
 });

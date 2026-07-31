@@ -40,47 +40,71 @@ export interface SubscriptionStore {
 /**
  * Narrowing guard rather than a cast, so an unknown request body cannot
  * reach the database as a malformed subscription.
+ *
+ * An omitted userAgent key (value undefined) is normalised to null in
+ * place, so a subscribe body that leaves userAgent out entirely is stored
+ * identically to one that sends it explicitly as null. This mutates the
+ * candidate object, which is the same reference the caller goes on to use
+ * once this returns true.
  */
 export function isSubscriptionInput(value: unknown): value is SubscriptionInput {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
 
-  return (
-    typeof candidate.endpoint === "string" &&
-    typeof candidate.p256dh === "string" &&
-    typeof candidate.auth === "string" &&
-    (candidate.userAgent === null || typeof candidate.userAgent === "string")
-  );
+  if (
+    typeof candidate.endpoint !== "string" ||
+    candidate.endpoint.length === 0 ||
+    typeof candidate.p256dh !== "string" ||
+    typeof candidate.auth !== "string"
+  ) {
+    return false;
+  }
+
+  if (candidate.userAgent === undefined) {
+    candidate.userAgent = null;
+  }
+
+  return candidate.userAgent === null || typeof candidate.userAgent === "string";
+}
+
+/**
+ * Builds (without executing) the insert-or-update statement for a
+ * subscription. Exported separately from `upsert` so tests can assert on
+ * the exact statement the store issues via `.toSQL()`, rather than on a
+ * copy written by hand that could drift from the real query.
+ *
+ * push_subscriptions has a unique constraint on endpoint (Task 1), so this
+ * upsert targets that constraint: re-subscribing the same device updates
+ * the existing row instead of duplicating it. Subscribing again also means
+ * the device is reachable again, so any prior failure health is cleared
+ * rather than left to falsely mark a recovered device as unhealthy.
+ */
+export function buildUpsertStatement(userId: string, input: SubscriptionInput) {
+  return db
+    .insert(pushSubscriptions)
+    .values({
+      userId,
+      endpoint: input.endpoint,
+      p256dh: input.p256dh,
+      auth: input.auth,
+      userAgent: input.userAgent,
+    })
+    .onConflictDoUpdate({
+      target: pushSubscriptions.endpoint,
+      set: {
+        userId,
+        p256dh: input.p256dh,
+        auth: input.auth,
+        userAgent: input.userAgent,
+        failureCount: 0,
+        lastFailureAt: null,
+      },
+    });
 }
 
 export const drizzleSubscriptionStore: SubscriptionStore = {
   async upsert(userId, input) {
-    // push_subscriptions has a unique constraint on endpoint (Task 1), so
-    // this upsert targets that constraint: re-subscribing the same device
-    // updates the existing row instead of duplicating it. Subscribing again
-    // also means the device is reachable again, so any prior failure health
-    // is cleared rather than left to falsely mark a recovered device as
-    // unhealthy.
-    await db
-      .insert(pushSubscriptions)
-      .values({
-        userId,
-        endpoint: input.endpoint,
-        p256dh: input.p256dh,
-        auth: input.auth,
-        userAgent: input.userAgent,
-      })
-      .onConflictDoUpdate({
-        target: pushSubscriptions.endpoint,
-        set: {
-          userId,
-          p256dh: input.p256dh,
-          auth: input.auth,
-          userAgent: input.userAgent,
-          failureCount: 0,
-          lastFailureAt: null,
-        },
-      });
+    await buildUpsertStatement(userId, input);
   },
 
   async remove(userId, endpoint) {
