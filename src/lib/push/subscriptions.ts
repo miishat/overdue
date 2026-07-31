@@ -8,6 +8,7 @@ import { pushSubscriptions } from "@/db/schema/push";
  */
 export interface StoredSubscription {
   id: string;
+  userId: string;
   endpoint: string;
   p256dh: string;
   auth: string;
@@ -128,6 +129,7 @@ export const drizzleSubscriptionStore: SubscriptionStore = {
 
     return rows.map((row) => ({
       id: row.id,
+      userId: row.userId,
       endpoint: row.endpoint,
       p256dh: row.p256dh,
       auth: row.auth,
