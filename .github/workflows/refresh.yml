@@ -1,0 +1,32 @@
+name: Refresh
+
+# Vercel Hobby cron is capped at once per day and fires anywhere within the
+# scheduled hour, which cannot support the instant date-change alert. GitHub
+# Actions is free and finer-grained, so the schedule lives here.
+on:
+  schedule:
+    # Every six hours. Scheduled runs on free tiers are best-effort and may be
+    # delayed or skipped; the job is idempotent and sliceable so a missed run
+    # self-heals on the next one.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the refresh slice
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$PRODUCTION_URL" ]; then
+            echo "CRON_SECRET or PRODUCTION_URL is not set"
+            exit 1
+          fi
+          status=$(curl --silent --show-error --fail-with-body \
+            --output response.json --write-out '%{http_code}' \
+            --request POST "$PRODUCTION_URL/api/refresh" \
+            --header "Authorization: Bearer $CRON_SECRET")
+          echo "HTTP $status"
+          cat response.json
