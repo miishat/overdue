@@ -67,4 +67,50 @@ describe("selectSlice", () => {
   it("pins the default slice size", () => {
     expect(DEFAULT_SLICE_SIZE).toBe(25);
   });
+
+  // The cap must be applied AFTER ordering. Capping first would take whichever
+  // books happened to arrive at the front of the input and defeat the whole
+  // point of the ordering: the stalest books would never be reached.
+  //
+  // The candidates that must survive are deliberately placed at the END of the
+  // input, so a slice-before-sort implementation drops exactly the ones the
+  // ordering exists to prioritise.
+  it("applies the cap after ordering, not before", () => {
+    const recent = Array.from({ length: DEFAULT_SLICE_SIZE }, (_, i) =>
+      item(`recent-${String(i).padStart(2, "0")}`, "2026-07-29T00:00:00Z"),
+    );
+    const ancient = item("ancient", "2020-01-01T00:00:00Z");
+    const never = item("never", null);
+
+    const slice = selectSlice([...recent, ancient, never], NOW);
+
+    expect(slice).toHaveLength(DEFAULT_SLICE_SIZE);
+    // Never-refreshed first, then the oldest refreshed, then the rest.
+    expect(slice[0].bookId).toBe("never");
+    expect(slice[1].bookId).toBe("ancient");
+    // The newest book must have been displaced off the end of the slice.
+    expect(slice.map((i) => i.bookId)).not.toContain(
+      `recent-${String(DEFAULT_SLICE_SIZE - 1).padStart(2, "0")}`,
+    );
+  });
+
+  // Determinism means the same set produces the same slice regardless of the
+  // order the rows arrived in. A comparator that returned 0 for ties would
+  // pass a single-ordering test while still making two runs disagree.
+  it("picks the same tied items whatever order they arrive in", () => {
+    const same = "2026-07-01T00:00:00Z";
+    const forward = selectSlice(
+      [item("a", same), item("b", same), item("c", same)],
+      NOW,
+      2,
+    );
+    const reversed = selectSlice(
+      [item("c", same), item("b", same), item("a", same)],
+      NOW,
+      2,
+    );
+
+    expect(forward.map((i) => i.bookId)).toEqual(["a", "b"]);
+    expect(reversed.map((i) => i.bookId)).toEqual(["a", "b"]);
+  });
 });
