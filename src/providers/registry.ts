@@ -42,7 +42,10 @@ export const PROVIDER_TIMEOUT_MS = 4000;
 // Combines the caller's own cancellation (e.g. a request's AbortSignal
 // threaded through from the search route) with a per-call timeout, so a
 // provider is cut off by whichever fires first.
-function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+export function withTimeout(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }

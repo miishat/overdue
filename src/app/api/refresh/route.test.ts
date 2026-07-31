@@ -9,6 +9,7 @@ const candidates = vi.fn(async () => []);
 const currentSnapshot = vi.fn(async () => null);
 const refetchSnapshot = vi.fn(async () => null);
 const writeChanges = vi.fn(async () => undefined);
+const commitRefetched = vi.fn(async () => undefined);
 const markRefreshed = vi.fn(async () => undefined);
 const enqueue = vi.fn(async () => undefined);
 
@@ -18,6 +19,7 @@ vi.mock("@/lib/refresh/port", () => ({
     currentSnapshot,
     refetchSnapshot,
     writeChanges,
+    commitRefetched,
     markRefreshed,
     enqueue,
   },
@@ -126,6 +128,50 @@ describe("POST /api/refresh", () => {
     const text = await res.text();
 
     expect(text).not.toContain(SECRET);
+  });
+
+  it("never includes the secret in the 401 body", async () => {
+    process.env.CRON_SECRET = SECRET;
+
+    const res = await post({ Authorization: `Bearer ${SECRET.slice(0, -1)}x` });
+    const text = await res.text();
+
+    expect(res.status).toBe(401);
+    // A rejection body must not confirm any part of the secret, and must not
+    // echo the supplied credential back either.
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain(SECRET.slice(0, -1));
+  });
+
+  it("never includes the secret in the 503 body", async () => {
+    process.env.CRON_SECRET = SECRET;
+    const supplied = `Bearer ${SECRET}`;
+    delete process.env.CRON_SECRET;
+
+    const res = await post({ Authorization: supplied });
+    const text = await res.text();
+
+    expect(res.status).toBe(503);
+    expect(text).not.toContain(SECRET);
+  });
+
+  it("returns 401 for a non-Bearer scheme carrying the raw secret", async () => {
+    process.env.CRON_SECRET = SECRET;
+
+    const res = await post({ Authorization: SECRET });
+
+    expect(res.status).toBe(401);
+    expect(candidates).not.toHaveBeenCalled();
+    expect(await res.text()).not.toContain(SECRET);
+  });
+
+  it("returns 401 for a Basic scheme carrying the secret", async () => {
+    process.env.CRON_SECRET = SECRET;
+
+    const res = await post({ Authorization: `Basic ${SECRET}` });
+
+    expect(res.status).toBe(401);
+    expect(candidates).not.toHaveBeenCalled();
   });
 
   it("rejects GET with 405", async () => {

@@ -30,7 +30,7 @@ export interface AuthorRow {
 }
 
 // Higher wins. Mirrors the spec's rule that manual outranks everything.
-const TRUST_RANK: Record<ProviderName, number> = {
+export const TRUST_RANK: Record<ProviderName, number> = {
   manual: 100,
   hardcover: 80,
   wikidata: 70,

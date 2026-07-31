@@ -24,8 +24,11 @@ interface Recorded {
   written: ChangeRow[];
   marked: string[];
   queued: Array<{ kind: string; payload: unknown }>;
+  committed: string[];
   writeCalls: number;
   markCalls: number;
+  /** Every port call in the order it happened, for ordering assertions. */
+  calls: string[];
 }
 
 function port(
@@ -35,8 +38,10 @@ function port(
     written: [],
     marked: [],
     queued: [],
+    committed: [],
     writeCalls: 0,
     markCalls: 0,
+    calls: [],
   };
 
   const base: RefreshPort = {
@@ -53,6 +58,9 @@ function port(
       recorded.writeCalls += 1;
       recorded.written.push(...rows);
     },
+    async commitRefetched(bookId) {
+      recorded.committed.push(bookId);
+    },
     async markRefreshed(bookIds) {
       recorded.markCalls += 1;
       recorded.marked.push(...bookIds);
@@ -63,7 +71,37 @@ function port(
     ...overrides,
   };
 
-  return { port: base, recorded };
+  // Wrap after the overrides so the log records the port runRefresh actually
+  // sees, whichever implementation of each method is in play.
+  const logged: RefreshPort = {
+    candidates: base.candidates.bind(base),
+    async currentSnapshot(bookId, now) {
+      recorded.calls.push(`currentSnapshot:${bookId}`);
+      return base.currentSnapshot(bookId, now);
+    },
+    async refetchSnapshot(bookId, now) {
+      recorded.calls.push(`refetchSnapshot:${bookId}`);
+      return base.refetchSnapshot(bookId, now);
+    },
+    async writeChanges(rows) {
+      recorded.calls.push("writeChanges");
+      return base.writeChanges(rows);
+    },
+    async commitRefetched(bookId) {
+      recorded.calls.push(`commitRefetched:${bookId}`);
+      return base.commitRefetched(bookId);
+    },
+    async markRefreshed(bookIds, at) {
+      recorded.calls.push("markRefreshed");
+      return base.markRefreshed(bookIds, at);
+    },
+    async enqueue(userId, kind, payload) {
+      recorded.calls.push(`enqueue:${kind}`);
+      return base.enqueue(userId, kind, payload);
+    },
+  };
+
+  return { port: logged, recorded };
 }
 
 describe("runRefresh", () => {
@@ -193,6 +231,100 @@ describe("runRefresh", () => {
     // writeChanges must run before markRefreshed. If it throws, the book must
     // not be marked refreshed, or it would be skipped next run despite its
     // changes never having been persisted.
+    expect(recorded.marked).toEqual([]);
+    // And the new values must NOT have been committed. If they had been, the
+    // next run would read them back as current, diff to nothing, and the date
+    // move would have no change_log row ever: permanently lost history.
+    expect(recorded.committed).toEqual([]);
+    expect(recorded.calls).not.toContain("commitRefetched:b1");
+  });
+
+  it("orders the run history, alerts, write-back, mark", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return snap(bookId, { releaseDate: "2028-01-15" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    // The whole point of the ordering: every read and diff happens first, the
+    // append-only history is written next, only then is anyone told about it,
+    // and only then are the old values made unobservable by the write-back.
+    expect(recorded.calls).toEqual([
+      "currentSnapshot:b1",
+      "refetchSnapshot:b1",
+      "writeChanges",
+      "enqueue:date_change",
+      "commitRefetched:b1",
+      "markRefreshed",
+    ]);
+  });
+
+  it("diffs the whole slice before writing anything", async () => {
+    const { port: p, recorded } = port({
+      async candidates() {
+        return [
+          { bookId: "b1", lastRefreshedAt: null, seriesId: null },
+          { bookId: "b2", lastRefreshedAt: null, seriesId: null },
+        ];
+      },
+      async refetchSnapshot(bookId) {
+        return snap(bookId, { releaseDate: "2028-01-15" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    // b2 must be read against its UNCOMMITTED stored state. A per-book commit
+    // inside the loop would interleave here.
+    expect(recorded.calls.slice(0, 5)).toEqual([
+      "currentSnapshot:b1",
+      "refetchSnapshot:b1",
+      "currentSnapshot:b2",
+      "refetchSnapshot:b2",
+      "writeChanges",
+    ]);
+    expect(recorded.committed).toEqual(["b1", "b2"]);
+  });
+
+  it("records a failure and does not mark refreshed when the write-back fails", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return snap(bookId, { releaseDate: "2028-01-15" });
+      },
+      async commitRefetched() {
+        throw new Error("write-back rejected");
+      },
+    });
+
+    const result = await runRefresh(p, NOW);
+
+    // The deliberate trade: the change_log row is already written, so the book
+    // is left unmarked and the next run recomputes the same diff and writes a
+    // duplicate row. A duplicate history row is recoverable; a missing one is
+    // not.
+    expect(recorded.written).toHaveLength(1);
+    expect(result.failures).toEqual([
+      { bookId: "b1", reason: "write-back rejected" },
+    ]);
+    expect(recorded.marked).toEqual([]);
+  });
+
+  it("does not commit or mark a book whose alert could not be queued", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return snap(bookId, { releaseDate: "2028-01-15" });
+      },
+      async enqueue() {
+        throw new Error("queue unavailable");
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    expect(recorded.written).toHaveLength(1);
+    expect(recorded.committed).toEqual([]);
     expect(recorded.marked).toEqual([]);
   });
 
