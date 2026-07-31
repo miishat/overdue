@@ -9,9 +9,11 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     expect(payload.body).toBe(
-      "The Long Winter was pushed back from 2028-01-15 to 2028-03-01.",
+      "The Long Winter was pushed back from 15 Jan 2028 to 1 Mar 2028.",
     );
   });
 
@@ -21,9 +23,25 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-03-01",
       to: "2028-01-15",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     expect(payload.body).toBe(
-      "The Long Winter was moved up from 2028-03-01 to 2028-01-15.",
+      "The Long Winter was moved up from 1 Mar 2028 to 15 Jan 2028.",
+    );
+  });
+
+  it("renders a season-to-day move at each date's own precision", () => {
+    const payload = buildDateChangeAlert({
+      bookTitle: "The Long Winter",
+      bookId: "book-1",
+      from: "2027-09-01",
+      to: "2028-01-15",
+      fromPrecision: "season",
+      toPrecision: "day",
+    });
+    expect(payload.body).toBe(
+      "The Long Winter was pushed back from Fall 2027 to 15 Jan 2028.",
     );
   });
 
@@ -33,9 +51,25 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: null,
       to: "2028-03-01",
+      fromPrecision: null,
+      toPrecision: "day",
     });
     expect(payload.body).toBe(
-      "The Long Winter now has a release date: 2028-03-01.",
+      "The Long Winter now has a release date: 1 Mar 2028.",
+    );
+  });
+
+  it("announces a first-ever date being set at season precision", () => {
+    const payload = buildDateChangeAlert({
+      bookTitle: "The Long Winter",
+      bookId: "book-1",
+      from: null,
+      to: "2027-09-01",
+      fromPrecision: null,
+      toPrecision: "season",
+    });
+    expect(payload.body).toBe(
+      "The Long Winter now has a release date: Fall 2027.",
     );
   });
 
@@ -45,9 +79,25 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-03-01",
       to: null,
+      fromPrecision: "day",
+      toPrecision: null,
     });
     expect(payload.body).toBe(
-      "The Long Winter's release date has been withdrawn. It was 2028-03-01.",
+      "The Long Winter's release date has been withdrawn. It was 1 Mar 2028.",
+    );
+  });
+
+  it("announces a withdrawn date that was only known to season precision", () => {
+    const payload = buildDateChangeAlert({
+      bookTitle: "The Long Winter",
+      bookId: "book-1",
+      from: "2027-09-01",
+      to: null,
+      fromPrecision: "season",
+      toPrecision: null,
+    });
+    expect(payload.body).toBe(
+      "The Long Winter's release date has been withdrawn. It was Fall 2027.",
     );
   });
 
@@ -57,6 +107,8 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     expect(payload.body).toContain("A Rare Title Nobody Else Uses");
   });
@@ -67,6 +119,8 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-42",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     expect(payload.url).toBe("/books/book-42");
   });
@@ -77,12 +131,16 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     const second = buildDateChangeAlert({
       bookTitle: "The Long Winter",
       bookId: "book-1",
       from: null,
       to: "2028-06-01",
+      fromPrecision: null,
+      toPrecision: "day",
     });
     expect(first.tag).toBe(second.tag);
   });
@@ -93,21 +151,58 @@ describe("buildDateChangeAlert", () => {
       bookId: "book-1",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     const bookTwo = buildDateChangeAlert({
       bookTitle: "A Different Book",
       bookId: "book-2",
       from: "2028-01-15",
       to: "2028-03-01",
+      fromPrecision: "day",
+      toPrecision: "day",
     });
     expect(bookOne.tag).not.toBe(bookTwo.tag);
   });
 
+  it("degrades an absent precision to something sensible rather than throwing", () => {
+    const payload = buildDateChangeAlert({
+      bookTitle: "The Long Winter",
+      bookId: "book-1",
+      from: "2028-01-15",
+      to: "2028-03-01",
+    });
+    expect(payload.body).toBe(
+      "The Long Winter was pushed back from 15 Jan 2028 to 1 Mar 2028.",
+    );
+  });
+
   it("produces a payload that satisfies isPushPayload", () => {
     const cases = [
-      { bookTitle: "A", bookId: "1", from: "2028-01-15", to: "2028-03-01" },
-      { bookTitle: "B", bookId: "2", from: null, to: "2028-03-01" },
-      { bookTitle: "C", bookId: "3", from: "2028-03-01", to: null },
+      {
+        bookTitle: "A",
+        bookId: "1",
+        from: "2028-01-15",
+        to: "2028-03-01",
+        fromPrecision: "day" as const,
+        toPrecision: "day" as const,
+      },
+      {
+        bookTitle: "B",
+        bookId: "2",
+        from: null,
+        to: "2028-03-01",
+        fromPrecision: null,
+        toPrecision: "day" as const,
+      },
+      {
+        bookTitle: "C",
+        bookId: "3",
+        from: "2028-03-01",
+        to: null,
+        fromPrecision: "day" as const,
+        toPrecision: null,
+      },
     ];
     for (const input of cases) {
       const payload = buildDateChangeAlert(input);

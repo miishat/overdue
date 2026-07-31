@@ -36,20 +36,36 @@ describe("buildDigest", () => {
         bookTitle: "Second Sun",
         bookId: "book-2",
         date: "2028-03-01",
+        datePrecision: "day",
       },
       {
         kind: "announced",
         bookTitle: "Third Wave",
         bookId: "book-3",
         date: "2029-01-01",
+        datePrecision: "year",
       },
     ];
     const payload = buildDigest(items);
     expect(payload).not.toBeNull();
     expect(payload!.title).toBe("3 updates");
     expect(payload!.body).toBe(
-      "The Long Winter is out today. Second Sun releases 2028-03-01. Third Wave was announced for 2029-01-01.",
+      "The Long Winter is out today. Second Sun releases 1 Mar 2028. Third Wave was announced for 2029.",
     );
+  });
+
+  it("renders an upcoming item known only to season precision without asserting a day", () => {
+    const items: DigestItem[] = [
+      {
+        kind: "upcoming",
+        bookTitle: "Second Sun",
+        bookId: "book-2",
+        date: "2028-06-01",
+        datePrecision: "season",
+      },
+    ];
+    const payload = buildDigest(items);
+    expect(payload!.body).toBe("Second Sun releases Summer 2028.");
   });
 
   it("uses the same fixed tag regardless of contents", () => {
@@ -68,6 +84,7 @@ describe("buildDigest", () => {
         bookTitle: "B",
         bookId: "book-2",
         date: "2028-03-01",
+        datePrecision: "day",
       },
     ]);
     expect(single!.tag).toBe(multiple!.tag);
@@ -89,6 +106,7 @@ describe("buildDigest", () => {
           bookTitle: "A",
           bookId: "book-1",
           date: "2028-03-01",
+          datePrecision: "day",
         },
         {
           kind: "announced",

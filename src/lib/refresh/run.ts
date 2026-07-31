@@ -166,6 +166,8 @@ export async function runRefresh(
               bookId: candidate.bookId,
               from: dateMove.oldValue,
               to: dateMove.newValue,
+              fromPrecision: dateMove.oldValue === null ? null : before.datePrecision,
+              toPrecision: dateMove.newValue === null ? null : after.datePrecision,
               provider: dateMove.provider,
             },
           });
