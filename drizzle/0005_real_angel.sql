@@ -1,3 +1,8 @@
+-- Hand-edited: drizzle-kit generate also produced statements re-adding
+-- "series_title_unique" and "release_book_region_format_unique". Those were
+-- removed because migrations 0003 and 0004 already create those constraints,
+-- so re-adding them here would abort a fresh replay from 0000 with a
+-- duplicate-object error.
 CREATE TABLE "notification_queue" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
