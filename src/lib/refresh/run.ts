@@ -11,6 +11,22 @@ import type { BookSnapshot } from "./snapshot";
  * missed precisely because they mocked the persistence function. Fakes at this
  * boundary keep the orchestration honestly testable.
  */
+/**
+ * What one read-only re-fetch produced.
+ *
+ * `resolution` is deliberately `unknown` to runRefresh: it is the port's own
+ * handle on whatever it needs to perform the deferred write-back, handed back
+ * to commitRefetched untouched. Carrying it through the return value rather
+ * than stashing it in module-level state in the port is what makes the port
+ * reentrant: two overlapping runs cannot clobber each other's pending
+ * resolutions, and nothing survives the run that created it.
+ */
+export interface RefetchedBook {
+  /** What the stored snapshot is PREDICTED to become once committed. */
+  snapshot: BookSnapshot;
+  resolution: unknown;
+}
+
 export interface RefreshPort {
   candidates(): Promise<Array<Sliceable & { seriesId: string | null }>>;
   /**
@@ -36,22 +52,33 @@ export interface RefreshPort {
    * detail's history would silently miss it forever. So the run makes a change
    * observable before it makes it unobservable.
    */
-  refetchSnapshot(bookId: string, now: Date): Promise<BookSnapshot | null>;
+  refetchSnapshot(bookId: string, now: Date): Promise<RefetchedBook | null>;
   writeChanges(rows: ChangeRow[]): Promise<void>;
   /**
-   * The deferred half of refetchSnapshot: commit the snapshot that was
-   * resolved for this book to books/releases/release_sources. Called only
-   * after writeChanges has durably recorded the history for the whole run.
+   * The deferred half of refetchSnapshot: commit the resolution refetchSnapshot
+   * produced for this book to books/releases/release_sources. Called only after
+   * writeChanges has durably recorded the history for the whole run.
+   *
+   * MUST return the ACTUAL post-commit snapshot, read back from the database
+   * exactly the way currentSnapshot reads it. runRefresh diffs it against the
+   * prediction so that any divergence between what was predicted and what was
+   * really written is recorded rather than silently lost. See phase 5.
+   *
+   * MUST throw rather than return quietly if there is no resolution to commit.
+   * A port that reports success for a commit it did not perform would let
+   * runRefresh mark the book refreshed on the strength of a write that never
+   * happened.
    *
    * DELIBERATE TRADE: if this step fails, the next run re-fetches, recomputes
    * the same diff, and writes a DUPLICATE change_log row. That is the correct
    * direction to fail in. A duplicate history row is recoverable by a reader;
    * a missing one is not.
-   *
-   * A no-op for a book that had nothing to commit (a book the providers no
-   * longer return).
    */
-  commitRefetched(bookId: string): Promise<void>;
+  commitRefetched(
+    bookId: string,
+    resolution: unknown,
+    now: Date,
+  ): Promise<BookSnapshot>;
   markRefreshed(bookIds: string[], at: Date): Promise<void>;
   enqueue(userId: string, kind: string, payload: unknown): Promise<void>;
 }
@@ -82,9 +109,23 @@ export async function runRefresh(
   const failures: RefreshResult["failures"] = [];
   let changed = 0;
 
+  /**
+   * The resolutions this run is holding between the read phase and the
+   * write-back phase, scoped to this call. Module-level state here would make
+   * the port non-reentrant (two overlapping runs would delete each other's
+   * entries) and leaky (a throw from writeChanges would strand every entry for
+   * the slice on a warm serverless instance).
+   */
+  const refetched = new Map<string, RefetchedBook>();
+
   const fail = (bookId: string, error: unknown) => {
     failedIds.add(bookId);
     failures.push({ bookId, reason: reasonOf(error) });
+    // The HTTP response reports only a COUNT of failures, deliberately, so a
+    // book that fails forever would otherwise be undiagnosable. This is the
+    // only place the per-book reason is surfaced. Reasons come from provider
+    // and data-integrity errors, never from the request or CRON_SECRET.
+    console.error(`refresh: book ${bookId} failed: ${reasonOf(error)}`);
   };
 
   // Phase 1: read and diff only. Nothing is written to the database, and no
@@ -96,14 +137,17 @@ export async function runRefresh(
       // be picked up once it has been persisted.
       if (!before) continue;
 
-      const after = await port.refetchSnapshot(candidate.bookId, now);
+      const refetch = await port.refetchSnapshot(candidate.bookId, now);
       // Providers no longer returning the book is not a change worth
       // recording. Deleting our copy on a provider outage would be worse than
       // keeping stale data, since Postgres owns the data.
-      if (!after) {
+      if (!refetch) {
         succeeded.push(candidate.bookId);
         continue;
       }
+
+      refetched.set(candidate.bookId, refetch);
+      const after = refetch.snapshot;
 
       const diff = diffSnapshots(before, after);
       if (diff.length > 0) {
@@ -152,17 +196,55 @@ export async function runRefresh(
 
   // Phase 4: only now make the old values unobservable.
   const committed: string[] = [];
+  const corrections: ChangeRow[] = [];
   for (const bookId of succeeded) {
     if (failedIds.has(bookId)) continue;
+    const pending = refetched.get(bookId);
+    // Nothing was resolved for this book (the providers no longer return it),
+    // so there is nothing to write back. The port is never asked to commit
+    // without a resolution, and it treats being asked as a hard error.
+    if (!pending) {
+      committed.push(bookId);
+      continue;
+    }
     try {
-      await port.commitRefetched(bookId);
+      const actual = await port.commitRefetched(bookId, pending.resolution, now);
+      // The predicted snapshot phase 1 diffed is a MIRROR of the write rules,
+      // not the write itself, so it can be wrong. If it is, the difference
+      // between the prediction and what was really written is a real change to
+      // a stored value that no change_log row covers, and because the next run
+      // reads the committed value back as its "before" and predicts it again,
+      // the row would never be written by any later run either: permanently
+      // lost, in an append-only table. Diffing the actual committed snapshot
+      // against the prediction closes that for every field at once instead of
+      // relying on the mirror staying correct forever. A right prediction
+      // yields no rows and costs nothing.
+      corrections.push(...diffSnapshots(pending.snapshot, actual));
       committed.push(bookId);
     } catch (error) {
       fail(bookId, error);
     }
   }
 
-  // Phase 5: rotate the committed books to the back of the queue.
+  // Phase 5: the correcting history.
+  //
+  // This has to sit AFTER phase 4, for the same reason phase 4 sits after
+  // phase 2: it records values that only exist because the commit produced
+  // them, so it cannot be written before that commit. And it has to sit BEFORE
+  // markRefreshed, so that a failure here leaves every book unmarked and near
+  // the front of the queue rather than rotated away with a change unrecorded.
+  // A throw propagates, exactly like phase 2's, and markRefreshed never runs.
+  //
+  // No date_change alert is re-sent from here. Alerts are delivered in phase 3
+  // strictly before anything is made unobservable, and a correction row means
+  // the prediction was wrong rather than that a provider moved a date, so the
+  // history is the right place for it and a notification is not.
+  if (corrections.length > 0) {
+    await port.writeChanges(corrections);
+    rows.push(...corrections);
+  }
+
+  // Phase 6: rotate the committed books to the back of the queue.
   if (committed.length > 0) await port.markRefreshed(committed, now);
 
   return {

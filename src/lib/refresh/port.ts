@@ -228,11 +228,27 @@ async function predictSnapshot(
 }
 
 /**
- * The resolutions refetchSnapshot produced but has not yet written back, keyed
- * by bookId for the duration of one run, so that commitRefetched does not have
- * to re-do the provider calls and the resolution.
+ * Narrows the opaque resolution runRefresh carries back to commitRefetched.
+ *
+ * There is deliberately no fallback here. The old design kept the pending
+ * resolutions in a module-level Map and returned quietly when the entry was
+ * missing, which meant a concurrent run that had its entry deleted got a
+ * SUCCESSFUL commit for a write that never happened, and runRefresh went on to
+ * write change_log rows and mark the book fresh on the strength of it. A
+ * commit with nothing to commit is a hard error.
  */
-const pendingResolved = new Map<string, ResolvedBook>();
+function asResolvedBook(resolution: unknown, bookId: string): ResolvedBook {
+  if (
+    typeof resolution !== "object" ||
+    resolution === null ||
+    !Array.isArray((resolution as { sources?: unknown }).sources)
+  ) {
+    throw new Error(
+      `refresh write-back for book ${bookId} was given no resolution to commit`,
+    );
+  }
+  return resolution as ResolvedBook;
+}
 
 /**
  * Live RefreshPort backed by Drizzle/Postgres.
@@ -301,15 +317,17 @@ export const drizzleRefreshPort: RefreshPort = {
     // a failure, so the book still gets marked refreshed and rotates to the
     // back of the queue. Nothing is written, so a manual-only book keeps
     // everything it has.
-    if (fetched.length === 0) {
-      pendingResolved.delete(bookId);
-      return null;
-    }
+    if (fetched.length === 0) return null;
 
     const resolved = resolveGroup({ key: bookId, records: fetched });
-    pendingResolved.set(bookId, resolved);
 
-    return predictSnapshot(stored, resolved, now);
+    return {
+      snapshot: await predictSnapshot(stored, resolved, now),
+      // Handed straight back to commitRefetched by runRefresh. Nothing is
+      // stored here, so overlapping runs cannot interfere and no ResolvedBook
+      // outlives the run that produced it.
+      resolution: resolved,
+    };
   },
 
   async writeChanges(rows) {
@@ -327,11 +345,21 @@ export const drizzleRefreshPort: RefreshPort = {
     );
   },
 
-  async commitRefetched(bookId) {
-    const resolved = pendingResolved.get(bookId);
-    if (!resolved) return;
+  /**
+   * DELIBERATE: this always persists, even when the predicted snapshot exactly
+   * equals the stored one. BookSnapshot covers seven watched fields; the
+   * resolution also carries isbn13, description, authors, external ids, and
+   * the per-provider release_sources rows, none of which are in the snapshot
+   * and all of which do genuinely need refreshing. Skipping the write on a
+   * snapshot match would silently stop refreshing all of them. The accepted
+   * cost is that releases.updated_at churns on every pass and release_sources
+   * is re-written each time. The read-back below makes an unnecessary write
+   * harmless: it produces no change rows.
+   */
+  async commitRefetched(bookId, resolution, now) {
+    const resolved = asResolvedBook(resolution, bookId);
 
-    try {
+    {
       // Pre-check, so the corruption is prevented rather than merely reported.
       const owners = await db
         .select({ entityId: externalIds.entityId })
@@ -369,9 +397,19 @@ export const drizzleRefreshPort: RefreshPort = {
           `refresh write-back resolved to book ${written.bookId} but the snapshot was read from ${bookId}`,
         );
       }
-    } finally {
-      pendingResolved.delete(bookId);
     }
+
+    // The ACTUAL post-commit state, read back the same way currentSnapshot
+    // reads it, so runRefresh can diff it against the prediction. seriesId is
+    // the field that motivated this: upsertSeries INSERTS a series that
+    // predictSnapshot's read-only lookup could only see as null.
+    const actual = await loadStoredSnapshot(bookId, now);
+    if (!actual) {
+      throw new Error(
+        `refresh write-back committed book ${bookId} but could not read it back`,
+      );
+    }
+    return actual;
   },
 
   async markRefreshed(bookIds, at) {
