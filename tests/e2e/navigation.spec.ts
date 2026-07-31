@@ -45,6 +45,9 @@ test("the nav reaches Library and Search from the home page", async ({
 // delete or hide. On a database that already has real tracked rows, the
 // empty state cannot appear, so this assertion cannot be made honestly here.
 // Recorded as untestable rather than forced; see task-19-report.md.
+// Skipped, not deleted: this is the honest outcome per the task brief when an
+// assertion cannot be made without emptying the developer's live database.
+// See the comment above and task-19-report.md for the full reasoning.
 test.skip(
   "the shelf's empty-state link reaches /search",
   () => {},
