@@ -37,6 +37,20 @@ function monthsBetween(from: Date, to: Date): number {
   );
 }
 
+/**
+ * Shared "same calendar month" comparison, UTC year and month only. Used by
+ * horizonFor to bucket a date into "This month", and by buildShelf (src/lib/
+ * shelf.ts) to decide whether an already-released book is recent enough to
+ * still earn a shelf row. Exported so the two call sites cannot drift apart
+ * on what "this month" means.
+ */
+export function isSameUtcMonth(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth()
+  );
+}
+
 export function horizonFor(entry: ShelfEntry, now: Date): Horizon {
   // An undated entry is separated by whether anything is known to exist at
   // all. ANNOUNCED and RUMORED are real records; EXPECTED and HIATUS are not.
@@ -48,7 +62,7 @@ export function horizonFor(entry: ShelfEntry, now: Date): Horizon {
 
   const months = monthsBetween(now, entry.date);
 
-  if (months === 0) return "This month";
+  if (isSameUtcMonth(now, entry.date)) return "This month";
   if (months > 0 && months <= 3) return "Next 3 months";
   if (entry.date.getUTCFullYear() === now.getUTCFullYear()) {
     return "Later this year";

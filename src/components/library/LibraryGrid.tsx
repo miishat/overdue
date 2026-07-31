@@ -49,20 +49,33 @@ export function LibraryGrid({
         const seriesComplete = entry.seriesId
           ? completeSeriesIds.has(entry.seriesId)
           : false;
+        // Both markers live inside ShelfRow's identity slot now, matching
+        // series detail's placement (src/app/series/[id]/page.tsx), and each
+        // is its own block line, the same convention identity uses for
+        // title/author/series, so "Series complete" and a read-state label
+        // never run together on one line as "Series completeRead".
+        const identityExtra =
+          seriesComplete || state ? (
+            <>
+              {seriesComplete ? (
+                <span className="block font-mono text-[11px] uppercase text-verdigris">
+                  Series complete
+                </span>
+              ) : null}
+              {state ? (
+                <span className="block font-mono text-[11px] uppercase text-verdigris">
+                  {READ_STATE_LABELS[state]}
+                </span>
+              ) : null}
+            </>
+          ) : null;
         return (
-          <div key={entry.key}>
-            <ShelfRow entry={entry} now={now} />
-            {seriesComplete ? (
-              <span className="font-mono text-[11px] uppercase text-verdigris">
-                Series complete
-              </span>
-            ) : null}
-            {state ? (
-              <span className="font-mono text-[11px] uppercase text-verdigris">
-                {READ_STATE_LABELS[state]}
-              </span>
-            ) : null}
-          </div>
+          <ShelfRow
+            key={entry.key}
+            entry={entry}
+            now={now}
+            identityExtra={identityExtra}
+          />
         );
       })}
     </div>

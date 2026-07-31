@@ -27,9 +27,6 @@ test("the shelf renders every state it is responsible for", async ({ page }) => 
 
   // Certainty axis, asserted through the accessible label rather than colour.
   await expect(
-    rowWithIdentity(page, "E2E Hiatus Series Book 1").getByLabel("Released"),
-  ).toBeVisible();
-  await expect(
     rowWithIdentity(page, "E2E Dated Book").getByLabel("Dated"),
   ).toBeVisible();
   await expect(
@@ -48,14 +45,43 @@ test("the shelf renders every state it is responsible for", async ({ page }) => 
   // presence in the DOM (toBeAttached) is the accurate check here, not a
   // weaker one. Solid/dashed/dotted rules above keep a rendered border
   // despite the same w-0 base, which is why those five use toBeVisible().
+  // Role-based rather than getByLabel: an accessible name alone can match a
+  // node whose ancestor was pruned from the accessibility tree (e.g. by a
+  // `hidden` or `display: none` regression), because that match happens
+  // against the DOM, not the a11y tree. getByRole resolves through the
+  // accessibility tree itself, so it will not match a node that has been
+  // pruned out of it, which toBeAttached() alone cannot detect.
   await expect(
-    rowWithIdentity(page, "E2E Expected Series").getByLabel(
-      "Expected, not announced",
-    ),
+    rowWithIdentity(page, "E2E Expected Series").getByRole("img", {
+      name: "Expected, not announced",
+    }),
   ).toBeAttached();
   await expect(
-    rowWithIdentity(page, "E2E Hiatus Series, book 2").getByLabel("On hiatus"),
+    rowWithIdentity(page, "E2E Hiatus Series, book 2").getByRole("img", {
+      name: "On hiatus",
+    }),
   ).toBeAttached();
+});
+
+// E2E Hiatus Series Book 1 is seeded six years in the past (see
+// tests/e2e/fixtures/seed-states.ts). It is a real, already-released
+// backlist book, so the Waiting Shelf's "this month or still pending"
+// filter (src/lib/shelf.ts buildShelf) must drop it, while Library, which
+// shows everything tracked, must still show it.
+test("an old released backlist book is absent from the shelf but present in Library", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.locator('[data-slot="identity"]', {
+      hasText: "E2E Hiatus Series Book 1",
+    }),
+  ).toHaveCount(0);
+
+  await page.goto("/library");
+  await expect(
+    rowWithIdentity(page, "E2E Hiatus Series Book 1").getByLabel("Released"),
+  ).toBeVisible();
 });
 
 test("COMPLETE never appears on the shelf", async ({ page }) => {

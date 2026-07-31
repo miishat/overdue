@@ -57,12 +57,15 @@ test("a shelf row for a real book navigates to /books/<id>", async ({
   page,
 }) => {
   await page.goto("/");
-  // BOOK_HIATUS_ANCHOR_ID is a real row (RELEASED) with entry.bookId set, so
-  // ShelfRow links it to /books/<bookId>, not /series/<seriesId>.
-  const row = rowWithIdentity(page, "E2E Hiatus Series Book 1");
+  // BOOK_DATED_ID is a real row (DATED, future) with entry.bookId set, so
+  // ShelfRow links it to /books/<bookId>, not /series/<seriesId>. Not
+  // BOOK_HIATUS_ANCHOR_ID: that book released six years ago and, per the
+  // shelf's backlist filter (src/lib/shelf.ts buildShelf), no longer
+  // appears on "/" at all (see waiting-shelf.spec.ts's backlist test).
+  const row = rowWithIdentity(page, "E2E Dated Book");
   await row.locator('[data-slot="identity"] a').click();
   await expect(page).toHaveURL(
-    /\/books\/eeeeeeee-0000-4000-8000-000000000005$/,
+    /\/books\/eeeeeeee-0000-4000-8000-000000000001$/,
   );
 });
 
@@ -74,6 +77,20 @@ test("a synthetic row navigates to /series/<id>", async ({ page }) => {
   await row.locator('[data-slot="identity"] a').click();
   await expect(page).toHaveURL(
     /\/series\/eeeeeeee-0000-4000-8000-000000000032$/,
+  );
+});
+
+test("a series detail row for a real book navigates to /books/<id>", async ({
+  page,
+}) => {
+  // SERIES_HIATUS_ID's run includes BOOK_HIATUS_ANCHOR_ID, a real book row,
+  // so its identity slot on /series/<id> must link to /books/<id> the same
+  // way ShelfRow does on the Waiting Shelf.
+  await page.goto("/series/eeeeeeee-0000-4000-8000-000000000031");
+  const row = rowWithIdentity(page, "E2E Hiatus Series Book 1");
+  await row.locator('[data-slot="identity"] a').click();
+  await expect(page).toHaveURL(
+    /\/books\/eeeeeeee-0000-4000-8000-000000000005$/,
   );
 });
 

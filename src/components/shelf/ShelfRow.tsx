@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import type { ShelfEntry } from "@/lib/synthesise";
 import { DateColumn } from "./DateColumn";
 import { Gap } from "./Gap";
@@ -17,9 +18,18 @@ const COVER_WIDTH = 48;
 export function ShelfRow({
   entry,
   now,
+  identityExtra,
 }: {
   entry: ShelfEntry;
   now: Date;
+  /**
+   * Extra markers appended inside the identity slot, after the series line
+   * (e.g. Library's "Series complete" and read-state labels). Kept inside
+   * the four-slot grid rather than as siblings below the row, so an M5
+   * grid-template-areas theme swap can still position them; see series
+   * detail (src/app/series/[id]/page.tsx) for the placement this matches.
+   */
+  identityExtra?: ReactNode;
 }) {
   // A synthetic entry is a book that does not exist yet, so it can never have
   // a cover. Guarding on synthetic rather than only on coverUrl means a stray
@@ -47,6 +57,7 @@ export function ShelfRow({
             : `${entry.seriesTitle}, book ${entry.seriesPosition}`}
         </span>
       ) : null}
+      {identityExtra}
     </>
   );
 

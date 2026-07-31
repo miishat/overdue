@@ -7,6 +7,7 @@ import { tracks } from "@/db/schema/tracking";
 import { OFFICIAL_PROVIDERS } from "@/providers/registry";
 import { deriveStatus } from "@/resolution/status";
 import { getCurrentUserId } from "./current-user";
+import { isSameUtcMonth } from "./horizons";
 import {
   synthesiseSeriesEntry,
   type ShelfEntry,
@@ -49,6 +50,17 @@ export function buildShelf(input: {
   series: TrackedSeries[];
   now: Date;
   hiatusThresholdYears?: number;
+  /**
+   * The Waiting Shelf (default, false) and Library (true) diverge on exactly
+   * one thing: whether an already-released book still earns a row once its
+   * release month has passed. The shelf's purpose is "did anything change,"
+   * so a backlist book from three years ago is noise; Library's purpose is
+   * "everything I track," so it keeps the full backlist. Everything else
+   * about assembly (author resolution, synthetic entries, the COMPLETE
+   * guard) is identical, so this is a boolean on the one shared function
+   * rather than a second copy of the mapping logic.
+   */
+  includeReleasedBacklist?: boolean;
 }): ShelfEntry[] {
   const threshold =
     input.hiatusThresholdYears ?? DEFAULT_HIATUS_THRESHOLD_YEARS;
@@ -103,7 +115,25 @@ export function buildShelf(input: {
   // filter as COMPLETE. synthesiseSeriesEntry already returns null for a
   // complete series, so this is unreachable given today's callers. Kept as
   // a guard in case a future caller changes that invariant.
-  return entries.filter((entry) => entry.status !== "COMPLETE");
+  const withoutComplete = entries.filter(
+    (entry) => entry.status !== "COMPLETE",
+  );
+
+  if (input.includeReleasedBacklist) return withoutComplete;
+
+  // The Waiting Shelf only. A book-row entry whose date has already passed
+  // is a backlist entry unless it released this calendar month: "this just
+  // came out, go get it" is worth a row, an older backlist is not. Synthetic
+  // entries and anything still in the future are untouched. "This month"
+  // uses the same UTC year/month comparison horizonFor uses for its "This
+  // month" bucket (see isSameUtcMonth in horizons.ts), so the shelf and the
+  // horizon grouping cannot disagree about what counts as recent.
+  return withoutComplete.filter((entry) => {
+    if (entry.synthetic) return true;
+    if (!entry.date) return true;
+    if (entry.date.getTime() > input.now.getTime()) return true;
+    return isSameUtcMonth(entry.date, input.now);
+  });
 }
 
 /**
@@ -129,6 +159,29 @@ export async function loadShelf(
     source.trackedSeries(userId),
   ]);
   return buildShelf({ books: bookRows, series: seriesRows, now });
+}
+
+/**
+ * Library's counterpart to loadShelf: same query shape, same assembly, but
+ * keeps the full released backlist that the Waiting Shelf filters out. See
+ * buildShelf's includeReleasedBacklist for why this is a flag on shared
+ * assembly rather than a second copy of the mapping logic.
+ */
+export async function loadLibrary(
+  source: ShelfDataSource,
+  now: Date,
+): Promise<ShelfEntry[]> {
+  const userId = await getCurrentUserId();
+  const [bookRows, seriesRows] = await Promise.all([
+    source.trackedBooks(userId),
+    source.trackedSeries(userId),
+  ]);
+  return buildShelf({
+    books: bookRows,
+    series: seriesRows,
+    now,
+    includeReleasedBacklist: true,
+  });
 }
 
 /**

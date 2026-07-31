@@ -1,7 +1,7 @@
 import { LibraryGrid } from "@/components/library/LibraryGrid";
 import { getCurrentUserId } from "@/lib/current-user";
 import { drizzleReadStateStore, readStatesFor } from "@/lib/read-state";
-import { drizzleShelfSource, loadShelf } from "@/lib/shelf";
+import { drizzleShelfSource, loadLibrary } from "@/lib/shelf";
 
 // Library reads the database on every visit, same as the shelf: a static
 // build would freeze the list at build time and newly tracked books, or a
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export default async function LibraryPage() {
   const now = new Date();
-  const entries = await loadShelf(drizzleShelfSource, now);
+  const entries = await loadLibrary(drizzleShelfSource, now);
 
   // COMPLETE is a property of Series.status, not of any one book, so there
   // is no synthetic "complete" entry to filter for. The series' real books

@@ -7,7 +7,8 @@ import type { TrackedSeries } from "./synthesise";
 // touching a real database. See persist.test.ts for the same pattern.
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 
-const { buildShelf, loadShelf, mergeTrackedBookIds } = await import("./shelf");
+const { buildShelf, loadShelf, loadLibrary, mergeTrackedBookIds } =
+  await import("./shelf");
 type ShelfDataSource = import("./shelf").ShelfDataSource;
 type TrackedBookRow = import("./shelf").TrackedBookRow;
 
@@ -50,10 +51,13 @@ describe("buildShelf", () => {
   });
 
   it("derives RELEASED for a past date", () => {
+    // includeReleasedBacklist: true because this test is about status
+    // derivation, not about the shelf's backlist filter (covered below).
     const entries = buildShelf({
       books: [book({ releaseDate: new Date("2020-01-01T00:00:00Z") })],
       series: [],
       now: NOW,
+      includeReleasedBacklist: true,
     });
     expect(entries[0].status).toBe("RELEASED");
   });
@@ -218,6 +222,98 @@ describe("buildShelf", () => {
     expect(entries[0].status).toBe("ANNOUNCED");
     expect(entries.some((e) => e.synthetic)).toBe(false);
   });
+
+  // Fix: a tracked series resolves to its whole backlist (drizzleShelfSource
+  // resolves tracks.seriesId to every book in the series), but the Waiting
+  // Shelf's purpose is "did anything change," not "show me the whole
+  // series." A backlist book must not survive, and it must not outrank the
+  // one book actually pending.
+  it("drops an already-released backlist book but keeps the pending one", () => {
+    const entries = buildShelf({
+      books: [
+        book({
+          bookId: "backlist",
+          seriesId: "s1",
+          title: "Old Volume",
+          releaseDate: new Date("2020-01-01T00:00:00Z"),
+          precision: "day",
+        }),
+        book({
+          bookId: "pending",
+          seriesId: "s1",
+          title: "New Volume",
+          releaseDate: new Date("2028-01-01T00:00:00Z"),
+          precision: "day",
+        }),
+      ],
+      series: [],
+      now: NOW,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].bookId).toBe("pending");
+  });
+
+  it("keeps a book released this calendar month", () => {
+    const entries = buildShelf({
+      books: [
+        book({
+          bookId: "just-out",
+          releaseDate: new Date("2026-07-01T00:00:00Z"),
+          precision: "day",
+        }),
+      ],
+      series: [],
+      now: NOW,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].bookId).toBe("just-out");
+    expect(entries[0].status).toBe("RELEASED");
+  });
+
+  it("drops a book released last month, one day before the boundary", () => {
+    const entries = buildShelf({
+      books: [
+        book({
+          bookId: "just-missed",
+          releaseDate: new Date("2026-06-30T00:00:00Z"),
+          precision: "day",
+        }),
+      ],
+      series: [],
+      now: NOW,
+    });
+
+    expect(entries).toHaveLength(0);
+  });
+
+  it("keeps the full backlist when includeReleasedBacklist is set (Library)", () => {
+    const entries = buildShelf({
+      books: [
+        book({
+          bookId: "backlist",
+          seriesId: "s1",
+          releaseDate: new Date("2020-01-01T00:00:00Z"),
+          precision: "day",
+        }),
+        book({
+          bookId: "pending",
+          seriesId: "s1",
+          releaseDate: new Date("2028-01-01T00:00:00Z"),
+          precision: "day",
+        }),
+      ],
+      series: [],
+      now: NOW,
+      includeReleasedBacklist: true,
+    });
+
+    expect(entries.map((e) => e.bookId).sort()).toEqual([
+      "backlist",
+      "pending",
+    ]);
+  });
 });
 
 describe("mergeTrackedBookIds", () => {
@@ -256,5 +352,28 @@ describe("loadShelf", () => {
     expect(entries).toHaveLength(1);
     expect(seen).toHaveLength(2);
     expect(seen[0]).toBe(seen[1]);
+  });
+});
+
+describe("loadLibrary", () => {
+  it("returns the full tracked set, backlist included", async () => {
+    const source: ShelfDataSource = {
+      async trackedBooks() {
+        return [
+          book({
+            bookId: "backlist",
+            releaseDate: new Date("2020-01-01T00:00:00Z"),
+          }),
+        ];
+      },
+      async trackedSeries() {
+        return [];
+      },
+    };
+
+    const entries = await loadLibrary(source, NOW);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].bookId).toBe("backlist");
   });
 });

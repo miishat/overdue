@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Gap } from "@/components/shelf/Gap";
 import { StatusRule } from "@/components/shelf/StatusRule";
@@ -91,21 +92,45 @@ export default async function SeriesDetailPage({
                   )}
                 </div>
 
-                <div data-slot="identity" style={{ gridArea: "identity" }}>
-                  <span className="block font-display text-[15px] text-body">
-                    {entry.title}
-                  </span>
-                  {entry.authorName ? (
-                    <span className="block text-[12px] text-quiet">
-                      {entry.authorName}
-                    </span>
-                  ) : null}
-                  {readState ? (
-                    <span className="block font-mono text-[11px] uppercase text-verdigris">
-                      {READ_STATE_LABELS[readState]}
-                    </span>
-                  ) : null}
-                </div>
+                {(() => {
+                  const identity = (
+                    <>
+                      <span className="block font-display text-[15px] text-body">
+                        {entry.title}
+                      </span>
+                      {entry.authorName ? (
+                        <span className="block text-[12px] text-quiet">
+                          {entry.authorName}
+                        </span>
+                      ) : null}
+                      {readState ? (
+                        <span className="block font-mono text-[11px] uppercase text-verdigris">
+                          {READ_STATE_LABELS[readState]}
+                        </span>
+                      ) : null}
+                    </>
+                  );
+
+                  return (
+                    <div data-slot="identity" style={{ gridArea: "identity" }}>
+                      {/* Synthetic entries have no book id, so nothing to link
+                          to: a "Book 3" placeholder does not exist yet. Real
+                          entries match ShelfRow's behaviour (src/components/
+                          shelf/ShelfRow.tsx) so the run of a series is
+                          actually navigable, not just readable. */}
+                      {entry.bookId ? (
+                        <Link
+                          href={`/books/${entry.bookId}`}
+                          className="block no-underline"
+                        >
+                          {identity}
+                        </Link>
+                      ) : (
+                        identity
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div
                   data-slot="status"
