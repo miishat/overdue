@@ -105,4 +105,35 @@ describe("diffSnapshots", () => {
     expect(rows[0].oldValue).toBe("2");
     expect(rows[0].newValue).toBe("3");
   });
+
+  // A "book 0" prequel is a real publishing convention, so position 0 is a
+  // reachable value rather than a theoretical one. Serialising it as null
+  // would render a renumbering as the value being withdrawn. These two pin
+  // the difference between a null check and a falsy check.
+  it("serialises a series position of 0 as a value, not as absent", () => {
+    const rows = diffSnapshots(
+      snap({ seriesPosition: 0 }),
+      snap({ seriesPosition: 1 }),
+    );
+    expect(rows[0].oldValue).toBe("0");
+    expect(rows[0].newValue).toBe("1");
+  });
+
+  it("serialises a move to series position 0 as a value, not as absent", () => {
+    const rows = diffSnapshots(
+      snap({ seriesPosition: 1 }),
+      snap({ seriesPosition: 0 }),
+    );
+    expect(rows[0].oldValue).toBe("1");
+    expect(rows[0].newValue).toBe("0");
+  });
+
+  // An empty title reaches serialise the same way position 0 does, and is the
+  // shape a provider returns when it has the book but not its name.
+  it("serialises an empty string field as an empty string, not as absent", () => {
+    const rows = diffSnapshots(snap({ title: "A Book" }), snap({ title: "" }));
+    expect(rows[0].field).toBe("title");
+    expect(rows[0].oldValue).toBe("A Book");
+    expect(rows[0].newValue).toBe("");
+  });
 });
