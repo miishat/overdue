@@ -48,6 +48,23 @@ describe("proxy matcher", () => {
       true,
     );
   });
+
+  // manifest.webmanifest must stay reachable without the gate cookie, or
+  // iOS never sees display: standalone and Add to Home Screen is
+  // impossible, which in turn makes iOS push impossible.
+  it("does not cover /manifest.webmanifest", () => {
+    expect(
+      unstable_doesMiddlewareMatch({ config, url: "/manifest.webmanifest" }),
+    ).toBe(false);
+  });
+
+  // /sw.js must stay gated: it is fetched with credentials same-origin, so
+  // an unlocked user's cookie is sent and it registers fine.
+  it("covers /sw.js", () => {
+    expect(unstable_doesMiddlewareMatch({ config, url: "/sw.js" })).toBe(
+      true,
+    );
+  });
 });
 
 describe("proxy", () => {

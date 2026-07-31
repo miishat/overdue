@@ -3,6 +3,7 @@
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
 import { Serwist } from "serwist";
+import { isPushPayload } from "@/lib/notify/payload";
 
 // Serwist's InjectManifest webpack plugin replaces this global with the
 // list of precache entries at build time. It must stay declared even
@@ -25,36 +26,10 @@ const serwist = new Serwist({
 
 serwist.addEventListeners();
 
-// The shape below is the shared contract with Task 11, which builds push
-// payloads on the server as { title, body, url, tag }. Both sides must
-// agree on this shape; there is no schema between them, only this comment
-// and the two implementations.
-interface PushPayload {
-  title: string;
-  body?: string;
-  url?: string;
-  tag?: string;
-}
-
-function isPushPayload(value: unknown): value is PushPayload {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.title !== "string" || candidate.title.length === 0) {
-    return false;
-  }
-  if (candidate.body !== undefined && typeof candidate.body !== "string") {
-    return false;
-  }
-  if (candidate.url !== undefined && typeof candidate.url !== "string") {
-    return false;
-  }
-  if (candidate.tag !== undefined && typeof candidate.tag !== "string") {
-    return false;
-  }
-  return true;
-}
+// isPushPayload and its PushPayload shape live in src/lib/notify/payload.ts,
+// the shared contract with Task 11, which builds push payloads on the
+// server. Both sides import that module rather than each defining the
+// shape independently.
 
 // Defensive by design: a malformed or empty payload must show nothing
 // rather than throw. An exception inside a service worker is invisible
@@ -100,32 +75,49 @@ self.addEventListener("push", (event: PushEvent) => {
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
 
-  const data = event.notification.data as { url?: unknown } | undefined;
-  const url = typeof data?.url === "string" && data.url.length > 0 ? data.url : "/";
-  const targetUrl = new URL(url, self.location.origin).href;
-
   const focusOrOpen = async (): Promise<void> => {
-    const windows = await self.clients.matchAll({
-      type: "window",
-      includeUncontrolled: true,
-    });
+    try {
+      const data = event.notification.data as { url?: unknown } | undefined;
+      const rawUrl =
+        typeof data?.url === "string" && data.url.length > 0
+          ? data.url
+          : "/";
+      const resolved = new URL(rawUrl, self.location.origin);
 
-    for (const client of windows) {
-      if (client.url === targetUrl && "focus" in client) {
-        await client.focus();
-        return;
+      // The payload url is server-controlled today, but only ever open a
+      // same-origin URL, since this runs with the ability to focus and
+      // navigate the user's open windows.
+      const targetUrl =
+        resolved.origin === self.location.origin
+          ? resolved.href
+          : self.location.origin + "/";
+
+      const windows = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      for (const client of windows) {
+        if (client.url === targetUrl && "focus" in client) {
+          await client.focus();
+          return;
+        }
       }
-    }
 
-    for (const client of windows) {
-      if ("focus" in client && "navigate" in client) {
-        await client.focus();
-        await (client as WindowClient).navigate(targetUrl);
-        return;
+      for (const client of windows) {
+        if ("focus" in client && "navigate" in client) {
+          await client.focus();
+          await (client as WindowClient).navigate(targetUrl);
+          return;
+        }
       }
-    }
 
-    await self.clients.openWindow(targetUrl);
+      await self.clients.openWindow(targetUrl);
+    } catch {
+      // Nothing here should throw and go unnoticed: a cross-origin
+      // navigate() rejection or a malformed URL must not surface as an
+      // unhandled rejection inside the service worker.
+    }
   };
 
   event.waitUntil(focusOrOpen());
