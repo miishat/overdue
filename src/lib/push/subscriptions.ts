@@ -103,6 +103,25 @@ export function buildUpsertStatement(userId: string, input: SubscriptionInput) {
     });
 }
 
+/**
+ * Builds (without executing) the success-recording statement. Exported
+ * separately from `recordSuccess`, following the same pattern as
+ * `buildUpsertStatement`, so tests can assert on the exact statement the
+ * store issues via `.toSQL()` rather than on a hand-written copy that could
+ * drift from the real query.
+ *
+ * A recovered device must stop showing as unhealthy in Settings, which the
+ * plan calls worse than showing no health at all, so a success resets
+ * `failureCount` to zero rather than leaving a stale count from before the
+ * device recovered.
+ */
+export function buildRecordSuccessStatement(id: string, at: Date) {
+  return db
+    .update(pushSubscriptions)
+    .set({ lastSuccessAt: at, failureCount: 0 })
+    .where(eq(pushSubscriptions.id, id));
+}
+
 export const drizzleSubscriptionStore: SubscriptionStore = {
   async upsert(userId, input) {
     await buildUpsertStatement(userId, input);
@@ -142,10 +161,7 @@ export const drizzleSubscriptionStore: SubscriptionStore = {
   },
 
   async recordSuccess(id, at) {
-    await db
-      .update(pushSubscriptions)
-      .set({ lastSuccessAt: at })
-      .where(eq(pushSubscriptions.id, id));
+    await buildRecordSuccessStatement(id, at);
   },
 
   async recordFailure(id, at) {

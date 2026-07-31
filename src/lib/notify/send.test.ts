@@ -174,6 +174,52 @@ describe("sendToAll", () => {
     expect(store.failures).toEqual([]);
   });
 
+  it("does not misreport a successful send as failed when recordSuccess itself throws", async () => {
+    const subscription = makeSubscription({ id: "sub-1" });
+    const store = makeFakeStore();
+    store.recordSuccess = async () => {
+      throw new Error("transient database error");
+    };
+    const transport: PushTransport = {
+      async send() {
+        // succeeds
+      },
+    };
+
+    const result = await sendToAll({ subscriptions: [subscription], payload, transport, store, now });
+
+    // The send succeeded, so it must count as sent, not failed, even though
+    // the bookkeeping call that followed threw. Before the fix this fell
+    // into the catch block and was recorded as a failure via
+    // store.recordFailure, incrementing failureCount on a device that is
+    // actually working.
+    expect(result).toEqual({ sent: 1, failed: 0, removed: 0 });
+    expect(store.failures).toEqual([]);
+  });
+
+  it("includes the status code in the log line for a WebPushError", async () => {
+    const subscription = makeSubscription({ id: "sub-1" });
+    const store = makeFakeStore();
+    const transport: PushTransport = {
+      async send() {
+        throw webPushErrorWithStatus(500);
+      },
+    };
+    const errors: string[] = [];
+    const originalConsoleError = console.error;
+    console.error = (message: string) => {
+      errors.push(message);
+    };
+
+    try {
+      await sendToAll({ subscriptions: [subscription], payload, transport, store, now });
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(errors.some((message) => message.includes("(status 500)"))).toBe(true);
+  });
+
   it("is a no-op returning zeroes for an empty subscription list", async () => {
     const store = makeFakeStore();
     let sendCalls = 0;

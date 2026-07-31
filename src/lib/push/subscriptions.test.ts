@@ -10,9 +10,12 @@ process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 
 let isSubscriptionInput: typeof import("./subscriptions").isSubscriptionInput;
 let buildUpsertStatement: typeof import("./subscriptions").buildUpsertStatement;
+let buildRecordSuccessStatement: typeof import("./subscriptions").buildRecordSuccessStatement;
 
 beforeAll(async () => {
-  ({ isSubscriptionInput, buildUpsertStatement } = await import("./subscriptions"));
+  ({ isSubscriptionInput, buildUpsertStatement, buildRecordSuccessStatement } = await import(
+    "./subscriptions"
+  ));
 });
 
 const valid = {
@@ -129,5 +132,41 @@ describe("drizzleSubscriptionStore upsert statement", () => {
     const { sql } = buildUpsertStatement(userId, input).toSQL();
 
     expect(sql).not.toMatch(/on conflict \("user_id"\)/i);
+  });
+});
+
+// Binds to the statement drizzleSubscriptionStore.recordSuccess actually
+// runs, via buildRecordSuccessStatement, the same way the upsert tests above
+// bind to buildUpsertStatement. A device that recovers must stop showing as
+// unhealthy in Settings, so a success has to reset failureCount to zero, not
+// just record lastSuccessAt. A test that only asserts recordSuccess was
+// called (as send.test.ts's prior "resets failureCount" test did) cannot
+// fail if the reset is missing, since the store, not the caller, is what is
+// supposed to perform it; asserting on the compiled SQL is what closes that
+// gap.
+describe("drizzleSubscriptionStore recordSuccess statement", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+  const at = new Date("2026-07-31T00:00:00Z");
+
+  it("sets lastSuccessAt to the given time", () => {
+    const { sql, params } = buildRecordSuccessStatement(id, at).toSQL();
+
+    expect(sql).toMatch(/set\s+.*"last_success_at" = \$\d+/i);
+    expect(params).toContainEqual(at.toISOString());
+  });
+
+  it("resets failureCount to zero in the same statement", () => {
+    const { sql, params } = buildRecordSuccessStatement(id, at).toSQL();
+
+    expect(sql).toMatch(/"failure_count" = \$\d+/);
+    expect(params).toContain(0);
+  });
+
+  it("scopes the update to the given subscription id", () => {
+    const { sql, params } = buildRecordSuccessStatement(id, at).toSQL();
+
+    const idParamIndex = sql.match(/"id"\s*=\s*\$(\d+)/i)?.[1];
+    expect(idParamIndex).toBeDefined();
+    expect(params[Number(idParamIndex) - 1]).toBe(id);
   });
 });

@@ -65,8 +65,20 @@ export function createWebPushTransport(env: NodeJS.ProcessEnv): PushTransport | 
  */
 const DEAD_SUBSCRIPTION_STATUSES = new Set([404, 410]);
 
+/**
+ * Structural rather than `instanceof WebPushError`, so a future transport (a
+ * retrying wrapper, or a fetch-based one) that surfaces a plain
+ * `{ statusCode: 410 }` still triggers removal instead of being silently
+ * treated as transient forever. An error with no `statusCode` at all keeps
+ * returning false here, the same safe default as before: it is treated as
+ * transient and the subscription is kept.
+ */
 function isDeadSubscriptionError(error: unknown): boolean {
-  return error instanceof WebPushError && DEAD_SUBSCRIPTION_STATUSES.has(error.statusCode);
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) {
+    return false;
+  }
+  const { statusCode } = error as { statusCode: unknown };
+  return typeof statusCode === "number" && DEAD_SUBSCRIPTION_STATUSES.has(statusCode);
 }
 
 /**
@@ -96,9 +108,11 @@ export async function sendToAll(input: {
   }
 
   for (const subscription of subscriptions) {
+    let sendSucceeded = false;
+
     try {
       await transport.send(subscription, payload);
-      await store.recordSuccess(subscription.id, now);
+      sendSucceeded = true;
       result.sent += 1;
     } catch (error) {
       try {
@@ -113,6 +127,15 @@ export async function sendToAll(input: {
         // Recording the failure itself failed (for example a database
         // outage). This subscription is counted as failed, and the loop
         // still proceeds to the next subscription rather than throwing.
+        //
+        // Note this collapses two distinct causes into one count: a
+        // genuinely dead subscription whose removal then failed, and a
+        // transient send failure. Both land in `failed` rather than
+        // `removed`, so a database outage during cleanup is not
+        // distinguishable from a transient send failure by the returned
+        // counts alone. The log line below still carries the original send
+        // error, and this one carries the record error, so the distinction
+        // is recoverable from logs even though the counters merge it.
         console.error(
           `sendToAll: failed to record health for subscription ${subscription.id}: ${
             recordError instanceof Error ? recordError.message : String(recordError)
@@ -121,10 +144,29 @@ export async function sendToAll(input: {
         result.failed += 1;
       }
       console.error(
-        `sendToAll: send failed for subscription ${subscription.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `sendToAll: send failed for subscription ${subscription.id}${
+          error instanceof WebPushError ? ` (status ${error.statusCode})` : ""
+        }: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+
+    // Recording success is deliberately outside the send try/catch above.
+    // If the send succeeded but this bookkeeping call then throws (a
+    // transient database error), that must not fall into the catch above
+    // and get misreported as a send failure: the device is working, and
+    // recordFailure-ing it would show a working device as unhealthy in
+    // Settings, the exact opposite of the truth. `sent` was already
+    // incremented above and is not undone here.
+    if (sendSucceeded) {
+      try {
+        await store.recordSuccess(subscription.id, now);
+      } catch (recordError) {
+        console.error(
+          `sendToAll: send succeeded but failed to record success for subscription ${subscription.id}: ${
+            recordError instanceof Error ? recordError.message : String(recordError)
+          }`,
+        );
+      }
     }
   }
 

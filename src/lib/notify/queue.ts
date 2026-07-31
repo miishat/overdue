@@ -44,24 +44,59 @@ export function buildClaimUnsentStatement(userId: string, now: Date) {
     .returning();
 }
 
-export const drizzleNotificationQueue: NotificationQueuePort = {
-  async enqueue(userId, kind, payload) {
-    await db.insert(notificationQueue).values({
-      userId,
-      kind,
-      payload,
-    });
-  },
+/**
+ * Row shape `claimUnsent` maps down to. `buildClaimUnsentStatement` returns
+ * more columns (sentAt included), which is fine here since only these are
+ * read.
+ */
+interface ClaimedRow {
+  id: string;
+  userId: string;
+  kind: string;
+  payload: unknown;
+  createdAt: Date;
+}
 
-  async claimUnsent(userId, now) {
-    const rows = await buildClaimUnsentStatement(userId, now);
+/**
+ * Builds a NotificationQueuePort with the claim statement builder injected,
+ * defaulting to the real `buildClaimUnsentStatement`.
+ *
+ * This indirection exists purely so `claimUnsent` itself can be put under
+ * test: a fake store (`makeInMemoryQueue` in queue.test.ts) can trivially
+ * "cheat" atomicity by doing a select-then-update in two steps and still
+ * pass every contract test, and `drizzleNotificationQueue` was otherwise
+ * never exercised by any test, so nothing forced `claimUnsent` to actually
+ * call `buildClaimUnsentStatement`. A reviewer proved this by replacing the
+ * body with a plain `db.select()` that never marks rows sent, and the full
+ * suite stayed green. With the builder injected, a test can supply a spy in
+ * its place and assert `claimUnsent` calls it with the right arguments, so a
+ * body that stops calling the builder (the exact mutation above) now fails
+ * that assertion rather than passing unnoticed.
+ */
+export function createNotificationQueue(
+  buildClaim: (userId: string, now: Date) => PromiseLike<ClaimedRow[]> = buildClaimUnsentStatement,
+): NotificationQueuePort {
+  return {
+    async enqueue(userId, kind, payload) {
+      await db.insert(notificationQueue).values({
+        userId,
+        kind,
+        payload,
+      });
+    },
 
-    return rows.map((row) => ({
-      id: row.id,
-      userId: row.userId,
-      kind: row.kind,
-      payload: row.payload,
-      createdAt: row.createdAt,
-    }));
-  },
-};
+    async claimUnsent(userId, now) {
+      const rows = await buildClaim(userId, now);
+
+      return rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        kind: row.kind,
+        payload: row.payload,
+        createdAt: row.createdAt,
+      }));
+    },
+  };
+}
+
+export const drizzleNotificationQueue: NotificationQueuePort = createNotificationQueue();
