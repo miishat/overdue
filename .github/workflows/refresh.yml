@@ -14,6 +14,7 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Trigger the refresh slice
         env:
@@ -24,9 +25,28 @@ jobs:
             echo "CRON_SECRET or PRODUCTION_URL is not set"
             exit 1
           fi
-          status=$(curl --silent --show-error --fail-with-body \
+          # curl's exit code is captured rather than allowed to kill the step,
+          # so the response body is always printed. Without this, the default
+          # `bash -e` aborts on a 401 or 503 before the body is read, which
+          # loses the diagnostics on exactly the run most likely to fail.
+          set +e
+          status=$(curl --silent --show-error \
             --output response.json --write-out '%{http_code}' \
             --request POST "$PRODUCTION_URL/api/refresh" \
             --header "Authorization: Bearer $CRON_SECRET")
+          curl_exit=$?
+          set -e
+
           echo "HTTP $status"
-          cat response.json
+          cat response.json || echo "(no response body)"
+          echo
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "curl failed with exit code $curl_exit"
+            exit 1
+          fi
+          # A 2xx is the only success. The body above explains anything else.
+          case "$status" in
+            2*) ;;
+            *) echo "Refresh returned HTTP $status"; exit 1 ;;
+          esac

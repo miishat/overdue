@@ -3,7 +3,7 @@
  *
  * `readVapidConfig` returns `null` when the VAPID keys are not configured,
  * indicating that push notifications are not available in this environment.
- * This is not an error condition — local development and CI may legitimately
+ * This is not an error condition. Local development and CI may legitimately
  * run without push configured. Every caller must handle `null` gracefully
  * without crashing or showing an error page.
  *
