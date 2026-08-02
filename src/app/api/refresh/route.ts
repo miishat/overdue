@@ -1,6 +1,53 @@
 import { timingSafeEqual } from "node:crypto";
+import { getCurrentUserId } from "@/lib/current-user";
+import { drainQueue, type DrainResult } from "@/lib/notify/drain";
+import { drizzleNotificationQueue } from "@/lib/notify/queue";
+import { createWebPushTransport } from "@/lib/notify/send";
+import { drizzleSubscriptionStore } from "@/lib/push/subscriptions";
 import { drizzleRefreshPort } from "@/lib/refresh/port";
 import { runRefresh } from "@/lib/refresh/run";
+
+const EMPTY_DRAIN_RESULT: DrainResult = { claimed: 0, sent: 0, failed: 0 };
+
+/**
+ * Drains the notification queue after a refresh, in the same request.
+ * Doing both in one call keeps the scheduled workflow to a single HTTP call
+ * and means a run either completes or fails visibly, rather than leaving
+ * notifications stranded behind a second scheduled job that might not fire.
+ *
+ * Returns quietly (an empty result) when push is not configured, mirroring
+ * createWebPushTransport's own null contract: local development and CI stay
+ * quiet rather than erroring.
+ *
+ * Never throws. A drain failure must not turn a successful refresh into a
+ * 500, since recording changes is the more important half of the job and has
+ * already succeeded by the time this runs.
+ */
+async function runDrain(now: Date): Promise<DrainResult> {
+  try {
+    const transport = createWebPushTransport(process.env);
+    if (!transport) {
+      return EMPTY_DRAIN_RESULT;
+    }
+
+    const userId = await getCurrentUserId();
+    const subscriptions = await drizzleSubscriptionStore.listFor(userId);
+
+    return await drainQueue({
+      userId,
+      queue: drizzleNotificationQueue,
+      subscriptions,
+      transport,
+      store: drizzleSubscriptionStore,
+      now,
+    });
+  } catch (error) {
+    console.error(
+      `refresh: drain failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return EMPTY_DRAIN_RESULT;
+  }
+}
 
 // Mirrors src/lib/gate.ts's constantTimeEquals exactly: a length guard before
 // timingSafeEqual, since timingSafeEqual throws on mismatched buffer lengths
@@ -47,6 +94,10 @@ export async function POST(request: Request): Promise<Response> {
 
   const result = await runRefresh(drizzleRefreshPort, new Date());
 
+  // The drain runs after the refresh, not before: an alert must never be
+  // sent for a change whose history row has not been durably written yet.
+  const drainResult = await runDrain(new Date());
+
   // Counts only. Never echo request headers or anything derived from the
   // secret comparison, and never include per-failure provider error text
   // that might leak details about the deployment.
@@ -56,6 +107,9 @@ export async function POST(request: Request): Promise<Response> {
       changed: result.changed,
       changeRows: result.changeRows,
       failures: result.failures.length,
+      notificationsClaimed: drainResult.claimed,
+      notificationsSent: drainResult.sent,
+      notificationsFailed: drainResult.failed,
     },
     { status: 200 },
   );

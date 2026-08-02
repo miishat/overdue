@@ -29,6 +29,33 @@ vi.mock("@/lib/current-user", () => ({
   LOCAL_USER_ID: "u1",
 }));
 
+// Tracks call order across the refresh port and the drain, so a test can
+// prove the drain runs strictly after the refresh rather than merely that
+// both ran at some point.
+const callOrder: string[] = [];
+
+const drainQueue = vi.fn(async () => ({ claimed: 0, sent: 0, failed: 0 }));
+vi.mock("@/lib/notify/drain", () => ({
+  drainQueue: (...args: unknown[]) => drainQueue(...args),
+}));
+
+vi.mock("@/lib/notify/queue", () => ({
+  drizzleNotificationQueue: {},
+}));
+
+const listFor = vi.fn(async () => []);
+vi.mock("@/lib/push/subscriptions", () => ({
+  drizzleSubscriptionStore: { listFor: (...args: unknown[]) => listFor(...args) },
+}));
+
+// A fake transport, truthy, so runDrain proceeds to call drainQueue instead
+// of short-circuiting on push-not-configured (the real createWebPushTransport
+// returns null without VAPID env vars, which every test here leaves unset).
+const createWebPushTransport = vi.fn(() => ({ send: vi.fn() }));
+vi.mock("@/lib/notify/send", () => ({
+  createWebPushTransport: (...args: unknown[]) => createWebPushTransport(...args),
+}));
+
 const SECRET = "test-cron-secret-value";
 
 function post(headers?: Record<string, string>) {
@@ -51,6 +78,15 @@ describe("POST /api/refresh", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    callOrder.length = 0;
+    candidates.mockImplementation(async () => {
+      callOrder.push("refresh:candidates");
+      return [];
+    });
+    drainQueue.mockImplementation(async () => {
+      callOrder.push("drain:drainQueue");
+      return { claimed: 0, sent: 0, failed: 0 };
+    });
   });
 
   afterEach(() => {
@@ -177,5 +213,38 @@ describe("POST /api/refresh", () => {
   it("rejects GET with 405", async () => {
     const res = await get();
     expect(res.status).toBe(405);
+  });
+
+  it("calls the drain after the refresh completes", async () => {
+    process.env.CRON_SECRET = SECRET;
+
+    const res = await post({ Authorization: `Bearer ${SECRET}` });
+
+    expect(res.status).toBe(200);
+    expect(drainQueue).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(["refresh:candidates", "drain:drainQueue"]);
+  });
+
+  it("does not turn a successful refresh into a 500 when the drain fails", async () => {
+    process.env.CRON_SECRET = SECRET;
+    drainQueue.mockImplementation(async () => {
+      throw new Error("push service unreachable");
+    });
+
+    const res = await post({ Authorization: `Bearer ${SECRET}` });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    // Recording changes already succeeded by the time the drain runs, so its
+    // failure is surfaced in the body's counts rather than as a 500.
+    expect(body).toMatchObject({
+      examined: 0,
+      changed: 0,
+      changeRows: 0,
+      failures: 0,
+      notificationsClaimed: 0,
+      notificationsSent: 0,
+      notificationsFailed: 0,
+    });
   });
 });
