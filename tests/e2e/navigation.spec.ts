@@ -103,6 +103,7 @@ test("every nav destination and every reachable route returns 200, not 404", asy
     "/search",
     "/books/eeeeeeee-0000-4000-8000-000000000005",
     "/series/eeeeeeee-0000-4000-8000-000000000032",
+    "/settings",
   ];
 
   for (const route of routes) {

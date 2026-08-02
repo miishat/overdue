@@ -1,5 +1,9 @@
 import { EnablePush } from "@/components/push/EnablePush";
-import { PublicSubscription, SubscriptionHealth } from "@/components/push/SubscriptionHealth";
+import {
+  PublicSubscription,
+  SubscriptionHealth,
+  toPublicSubscription,
+} from "@/components/push/SubscriptionHealth";
 import { getCurrentUserId } from "@/lib/current-user";
 import { readVapidConfig } from "@/lib/notify/vapid";
 import { drizzleSubscriptionStore } from "@/lib/push/subscriptions";
@@ -19,15 +23,9 @@ export default async function SettingsPage() {
 
   // Explicit projection at the server boundary: p256dh, auth, and userId
   // are secrets or identity data the send path needs and Settings does
-  // not. Never spread a StoredSubscription into a client component prop.
-  const subscriptions: PublicSubscription[] = stored.map((sub) => ({
-    id: sub.id,
-    userAgent: sub.userAgent,
-    createdAt: sub.createdAt,
-    lastSuccessAt: sub.lastSuccessAt,
-    lastFailureAt: sub.lastFailureAt,
-    failureCount: sub.failureCount,
-  }));
+  // not. toPublicSubscription is the pinned, tested projection; never
+  // spread a StoredSubscription into a client component prop.
+  const subscriptions: PublicSubscription[] = stored.map(toPublicSubscription);
 
   const vapidConfig = readVapidConfig(process.env);
   const vapidPublicKey = vapidConfig?.publicKey ?? null;

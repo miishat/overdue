@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { PublicSubscription, SubscriptionHealth } from "./SubscriptionHealth";
+import {
+  PublicSubscription,
+  SubscriptionHealth,
+  toPublicSubscription,
+} from "./SubscriptionHealth";
 import type { StoredSubscription } from "@/lib/push/subscriptions";
 
 afterEach(() => cleanup());
@@ -140,11 +144,13 @@ describe("SubscriptionHealth", () => {
   });
 
   it("never renders or serialises the secret or identity fields from StoredSubscription", () => {
-    // Deliberately construct a full StoredSubscription with secret material,
-    // to prove the component's own prop type rejects it and that even if
-    // someone spread it, the secrets would not leak into output. This test
-    // documents the contract: SubscriptionHealth's props type is the
-    // narrow PublicSubscription, never StoredSubscription.
+    // Deliberately construct a full StoredSubscription with secret material
+    // and cast past the type system with `as unknown as`, simulating a
+    // caller that bypasses toPublicSubscription entirely (for example a
+    // spread). This does not prove the type system rejects the wider
+    // shape, since the cast defeats that; it proves only that even when the
+    // wider shape reaches this component at runtime, its secret fields are
+    // never rendered or serialised into output.
     const full: StoredSubscription = {
       id: "sub-1",
       userId: "user-secret-id",
@@ -176,4 +182,68 @@ describe("SubscriptionHealth", () => {
     expect(html).not.toContain(full.userId);
     expect(html).not.toContain(full.endpoint);
   });
+
+  it("labels a subscription that has never delivered but has failed repeatedly as failing, not never-used", () => {
+    render(
+      <SubscriptionHealth
+        subscriptions={[
+          makeSub({
+            lastSuccessAt: null,
+            lastFailureAt: new Date("2026-07-31T00:00:00.000Z"),
+            failureCount: 9,
+          }),
+        ]}
+        now={NOW}
+      />,
+    );
+    const row = screen.getByTestId("subscription-health-row");
+    expect(row.getAttribute("data-state")).toBe("failing");
+    const label = screen.getByTestId("subscription-health-label").textContent ?? "";
+    expect(label).toMatch(/failing/i);
+    expect(label).toContain("9");
+    expect(label).not.toMatch(/never used/i);
+  });
+});
+
+describe("toPublicSubscription", () => {
+  const full: StoredSubscription = {
+    id: "sub-1",
+    userId: "user-secret-id",
+    endpoint: "https://push.example.com/very-secret-endpoint",
+    p256dh: "SECRET_P256DH_KEY_VALUE",
+    auth: "SECRET_AUTH_SECRET_VALUE",
+    userAgent: "Test Browser",
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    lastSuccessAt: new Date("2026-07-30T00:00:00.000Z"),
+    lastFailureAt: null,
+    failureCount: 0,
+  };
+
+  it("projects to exactly the six public fields, no more and no fewer", () => {
+    const result = toPublicSubscription(full);
+    expect(Object.keys(result).sort()).toEqual(
+      [
+        "id",
+        "userAgent",
+        "createdAt",
+        "lastSuccessAt",
+        "lastFailureAt",
+        "failureCount",
+      ].sort(),
+    );
+  });
+
+  it("drops the secret and identity fields entirely", () => {
+    const result = toPublicSubscription(full);
+    expect(result).not.toHaveProperty("p256dh");
+    expect(result).not.toHaveProperty("auth");
+    expect(result).not.toHaveProperty("userId");
+    expect(result).not.toHaveProperty("endpoint");
+  });
+
+  // Mutation proof for CRITICAL 1: a spread-based projection carries every
+  // field of StoredSubscription, including the secrets, so it must fail the
+  // exact-six-keys assertion above. This is not exercised automatically;
+  // see task-15-report.md for the recorded failing output when
+  // toPublicSubscription is temporarily replaced with `(sub) => ({ ...sub })`.
 });
