@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { ShelfEntry } from "@/lib/synthesise";
+import { ChangedBadge } from "./ChangedBadge";
 import { DateColumn } from "./DateColumn";
 import { Gap } from "./Gap";
 import { StatusRule } from "./StatusRule";
@@ -19,6 +20,7 @@ export function ShelfRow({
   entry,
   now,
   identityExtra,
+  changed = false,
 }: {
   entry: ShelfEntry;
   now: Date;
@@ -30,6 +32,13 @@ export function ShelfRow({
    * detail (src/app/series/[id]/page.tsx) for the placement this matches.
    */
   identityExtra?: ReactNode;
+  /**
+   * True when this entry changed since the user's last shelf view (Task 16).
+   * Rendered inside the identity slot, not a fifth grid area: the theme
+   * contract fixes the shape at four slots so M5's CSS-only theme swap keeps
+   * working, so any new content has to live inside one of the existing ones.
+   */
+  changed?: boolean;
 }) {
   // A synthetic entry is a book that does not exist yet, so it can never have
   // a cover. Guarding on synthetic rather than only on coverUrl means a stray
@@ -58,6 +67,7 @@ export function ShelfRow({
         </span>
       ) : null}
       {identityExtra}
+      {changed ? <ChangedBadge /> : null}
     </>
   );
 

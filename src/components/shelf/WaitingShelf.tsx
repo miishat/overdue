@@ -6,9 +6,12 @@ import { ShelfRow } from "./ShelfRow";
 export function WaitingShelf({
   entries,
   now,
+  changedIds = new Set(),
 }: {
   entries: ShelfEntry[];
   now: Date;
+  /** Book ids that changed since the user's last shelf view (Task 16). */
+  changedIds?: Set<string>;
 }) {
   const groups = groupByHorizon(entries, now);
 
@@ -36,7 +39,12 @@ export function WaitingShelf({
             {group.horizon}
           </h2>
           {group.entries.map((entry) => (
-            <ShelfRow key={entry.key} entry={entry} now={now} />
+            <ShelfRow
+              key={entry.key}
+              entry={entry}
+              now={now}
+              changed={entry.bookId !== null && changedIds.has(entry.bookId)}
+            />
           ))}
         </section>
       ))}
