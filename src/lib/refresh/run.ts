@@ -30,6 +30,29 @@ export interface DateChangeQueuePayload {
 }
 
 /**
+ * The exact shape enqueued under kind "digest", shared with
+ * src/lib/notify/drain.ts (which imports it type-only to validate a claimed
+ * row before handing it to buildDigest) and with src/lib/notify/digest.ts
+ * (whose DigestItem is a type alias of this, so buildDigest's parameter and
+ * the writer's payload can never drift apart). This is the same
+ * writer-defines-it-once rule DateChangeQueuePayload follows above, applied
+ * to the second queue payload shape this milestone introduces.
+ *
+ * Only "released_today" and "announced" are ever produced by runRefresh
+ * today (see the status-change mapping below); "upcoming" is kept in the
+ * union because it is part of the digest's rendering vocabulary
+ * (buildDigest/describeItem already handle it) even though no writer emits
+ * it yet.
+ */
+export interface DigestQueuePayload {
+  kind: "released_today" | "upcoming" | "announced";
+  bookId: string;
+  bookTitle: string;
+  date: string | null;
+  datePrecision?: DatePrecision | null;
+}
+
+/**
  * Everything the run touches, injected.
  *
  * This is an interface rather than direct imports because M1 shipped a defect
@@ -132,6 +155,7 @@ export async function runRefresh(
   const succeeded: string[] = [];
   const failedIds = new Set<string>();
   const pendingAlerts: Array<{ bookId: string; payload: unknown }> = [];
+  const pendingDigests: Array<{ bookId: string; payload: unknown }> = [];
   const failures: RefreshResult["failures"] = [];
   let changed = 0;
 
@@ -200,6 +224,42 @@ export async function runRefresh(
             payload,
           });
         }
+
+        // Everything else this run touched is digest material, but only a
+        // status move is: title/seriesId/seriesPosition/coverUrl/
+        // datePrecision changes are dropped as noise (a corrected cover URL
+        // or a renumbered series entry is not news), and a release date
+        // move already has its own instant alert above, so re-surfacing it
+        // in the digest would tell the user twice. Status is kept because it
+        // is the one remaining field a reader plausibly wants to hear about,
+        // and only two of its transitions map onto something the digest
+        // already knows how to say: the book going live (RELEASED) or a
+        // firm announcement landing (ANNOUNCED). The other five statuses
+        // (DATED, ESTIMATED, RUMORED, EXPECTED, HIATUS, COMPLETE) have no
+        // digest wording of their own and are dropped rather than forced
+        // into one of the three that do.
+        const statusMove = diff.find((r) => r.field === "status");
+        if (statusMove) {
+          const digestKind =
+            statusMove.newValue === "RELEASED"
+              ? "released_today"
+              : statusMove.newValue === "ANNOUNCED"
+                ? "announced"
+                : null;
+          if (digestKind) {
+            const payload: DigestQueuePayload = {
+              kind: digestKind,
+              bookId: candidate.bookId,
+              bookTitle: after.title,
+              date: after.releaseDate,
+              datePrecision: after.datePrecision,
+            };
+            pendingDigests.push({
+              bookId: candidate.bookId,
+              payload,
+            });
+          }
+        }
       }
 
       succeeded.push(candidate.bookId);
@@ -221,6 +281,19 @@ export async function runRefresh(
       await port.enqueue(userId, "date_change", alert.payload);
     } catch (error) {
       fail(alert.bookId, error);
+    }
+  }
+
+  // Same phase, same reasoning: a digest row is queued only after its
+  // history row is durably written, and a book whose digest row fails to
+  // queue must not be committed or marked refreshed either, exactly like a
+  // book whose instant alert fails to queue above.
+  for (const digest of pendingDigests) {
+    if (failedIds.has(digest.bookId)) continue;
+    try {
+      await port.enqueue(userId, "digest", digest.payload);
+    } catch (error) {
+      fail(digest.bookId, error);
     }
   }
 

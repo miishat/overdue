@@ -1,14 +1,17 @@
 import type { DatePrecision } from "@/db/schema/enums";
 import type { PushPayload } from "@/lib/notify/payload";
+import type { DigestQueuePayload } from "@/lib/refresh/run";
 import { formatImprecise } from "@/lib/provenance";
 
-export interface DigestItem {
-  kind: "released_today" | "upcoming" | "announced";
-  bookTitle: string;
-  bookId: string;
-  date: string | null;
-  datePrecision?: DatePrecision | null;
-}
+/**
+ * A type alias, not a separate interface: DigestQueuePayload
+ * (src/lib/refresh/run.ts) is the canonical shape, defined and exported by
+ * the writer of "digest" queue rows, exactly as DateChangeQueuePayload is.
+ * Keeping the name DigestItem here (rather than renaming every call site)
+ * is what lets buildDigest's signature and this file's own tests stay
+ * unchanged while the writer owns the contract.
+ */
+export type DigestItem = DigestQueuePayload;
 
 const DIGEST_TAG = "digest";
 

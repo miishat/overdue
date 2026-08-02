@@ -430,6 +430,141 @@ describe("runRefresh", () => {
     expect(recorded.queued.map((q) => q.kind)).not.toContain("date_change");
   });
 
+  // --- Digest enqueue ---------------------------------------------------
+
+  it("enqueues a digest row when status moves to RELEASED", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { status: "RELEASED" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { status: "RELEASED" });
+      },
+    });
+
+    const result = await runRefresh(p, NOW);
+
+    expect(result.failures).toEqual([]);
+    const digestRows = recorded.queued.filter((q) => q.kind === "digest");
+    expect(digestRows).toHaveLength(1);
+    expect(digestRows[0].payload).toEqual({
+      kind: "released_today",
+      bookId: "b1",
+      bookTitle: "A Book",
+      date: "2027-09-01",
+      datePrecision: "season",
+    });
+  });
+
+  it("enqueues a digest row when status moves to ANNOUNCED", async () => {
+    const { port: p, recorded } = port({
+      async currentSnapshot(bookId) {
+        return snap(bookId, { status: "RUMORED" });
+      },
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { status: "ANNOUNCED" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { status: "ANNOUNCED" });
+      },
+    });
+
+    const result = await runRefresh(p, NOW);
+
+    expect(result.failures).toEqual([]);
+    const digestRows = recorded.queued.filter((q) => q.kind === "digest");
+    expect(digestRows).toHaveLength(1);
+    expect((digestRows[0].payload as { kind: string }).kind).toBe("announced");
+  });
+
+  it("does not enqueue a digest row for a status move that has no digest wording", async () => {
+    const { port: p, recorded } = port({
+      async currentSnapshot(bookId) {
+        return snap(bookId, { status: "RUMORED" });
+      },
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { status: "EXPECTED" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { status: "EXPECTED" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    expect(recorded.queued.map((q) => q.kind)).not.toContain("digest");
+  });
+
+  it("does not enqueue a digest row for a cosmetic field change (coverUrl)", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { coverUrl: "https://example.com/new.jpg" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { coverUrl: "https://example.com/new.jpg" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    expect(recorded.queued.map((q) => q.kind)).not.toContain("digest");
+  });
+
+  it("does not also enqueue a digest row for a plain date move (already an instant alert)", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { releaseDate: "2028-01-15" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { releaseDate: "2028-01-15" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    expect(recorded.queued.map((q) => q.kind)).toEqual(["date_change"]);
+  });
+
+  it("includes the book title in the digest payload", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { status: "RELEASED", title: "Named Book" }));
+      },
+      async commitRefetched(bookId) {
+        return snap(bookId, { status: "RELEASED", title: "Named Book" });
+      },
+    });
+
+    await runRefresh(p, NOW);
+
+    const digestRow = recorded.queued.find((q) => q.kind === "digest");
+    expect((digestRow?.payload as { bookTitle: string }).bookTitle).toBe("Named Book");
+  });
+
+  it("does not enqueue a digest row when nothing changed", async () => {
+    const { port: p, recorded } = port();
+    await runRefresh(p, NOW);
+    expect(recorded.queued.map((q) => q.kind)).not.toContain("digest");
+  });
+
+  it("does not commit or mark a book whose digest row could not be queued", async () => {
+    const { port: p, recorded } = port({
+      async refetchSnapshot(bookId) {
+        return refetched(snap(bookId, { status: "RELEASED" }));
+      },
+      async enqueue(_userId, kind) {
+        if (kind === "digest") throw new Error("queue unavailable");
+      },
+    });
+
+    const result = await runRefresh(p, NOW);
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].reason).toBe("queue unavailable");
+    expect(recorded.committed).toEqual([]);
+    expect(recorded.marked).toEqual([]);
+  });
+
   // --- Important 1: predicted-vs-actual correction --------------------------
 
   it("writes a correcting change_log row when the commit's actual snapshot diverges from the prediction", async () => {

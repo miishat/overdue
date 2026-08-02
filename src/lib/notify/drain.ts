@@ -1,6 +1,6 @@
 import type { DatePrecision } from "@/db/schema/enums";
 import type { StoredSubscription, SubscriptionStore } from "@/lib/push/subscriptions";
-import type { DateChangeQueuePayload } from "@/lib/refresh/run";
+import type { DateChangeQueuePayload, DigestQueuePayload } from "@/lib/refresh/run";
 import { buildDateChangeAlert } from "./alert";
 import { buildDigest, type DigestItem } from "./digest";
 import type { PushPayload } from "./payload";
@@ -61,8 +61,13 @@ function isDateChangeQueuePayload(value: unknown): value is DateChangeQueuePaylo
 
 const DIGEST_ITEM_KINDS = new Set(["released_today", "upcoming", "announced"]);
 
-/** Narrows a queued "digest" row's payload to one DigestItem. */
-function isDigestItemQueuePayload(value: unknown): value is DigestItem {
+/**
+ * Narrows a queued "digest" row's payload to one DigestQueuePayload
+ * (src/lib/refresh/run.ts, the writer). DigestItem (src/lib/notify/digest.ts)
+ * is a type alias of the same shape, so this predicate's return type also
+ * satisfies buildDigest's DigestItem[] parameter without a cast.
+ */
+function isDigestItemQueuePayload(value: unknown): value is DigestQueuePayload {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
 

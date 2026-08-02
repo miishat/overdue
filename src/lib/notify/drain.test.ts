@@ -383,6 +383,84 @@ describe("drainQueue", () => {
     expect(transport.sentPayloads).toHaveLength(1);
   });
 
+  // --- End-to-end: a real refresh feeding a real drain ----------------------
+
+  it("drives runRefresh and drainQueue over the same fake queue, proving a real refresh's digest rows are sent as one notification", async () => {
+    const queuedRows: Array<{ id: string; kind: string; payload: unknown }> = [];
+    let nextId = 0;
+
+    const refreshQueue: NotificationQueuePort = {
+      async enqueue(userId, kind, payload) {
+        queuedRows.push({ id: `q${nextId++}`, kind, payload });
+      },
+      async claimUnsent() {
+        throw new Error("not used by runRefresh");
+      },
+    };
+
+    const before1 = baseSnapshot({ bookId: "book-1", title: "First Book", status: "ESTIMATED" });
+    const after1 = baseSnapshot({ bookId: "book-1", title: "First Book", status: "RELEASED" });
+    const before2 = baseSnapshot({ bookId: "book-2", title: "Second Book", status: "RUMORED" });
+    const after2 = baseSnapshot({ bookId: "book-2", title: "Second Book", status: "ANNOUNCED" });
+
+    const snapshots: Record<string, { before: BookSnapshot; after: BookSnapshot }> = {
+      "book-1": { before: before1, after: after1 },
+      "book-2": { before: before2, after: after2 },
+    };
+
+    const refreshPort: RefreshPort = {
+      async candidates() {
+        return Object.keys(snapshots).map((bookId) => ({
+          bookId,
+          lastRefreshedAt: null,
+          seriesId: null,
+        }));
+      },
+      async currentSnapshot(bookId) {
+        return snapshots[bookId].before;
+      },
+      async refetchSnapshot(bookId) {
+        return { snapshot: snapshots[bookId].after, resolution: {} };
+      },
+      async writeChanges() {},
+      async commitRefetched(bookId) {
+        return snapshots[bookId].after;
+      },
+      async markRefreshed() {},
+      enqueue: refreshQueue.enqueue,
+    };
+
+    const refreshResult = await runRefresh(refreshPort, now);
+    expect(refreshResult.failures).toEqual([]);
+
+    // The real writer produced two digest rows, one per book, and no
+    // date_change row: neither status move is a release-date move.
+    expect(queuedRows.filter((r) => r.kind === "digest")).toHaveLength(2);
+    expect(queuedRows.filter((r) => r.kind === "date_change")).toHaveLength(0);
+
+    // Now drain those exact rows through the real drainQueue.
+    const drainableQueue = makeQueue(
+      queuedRows.map((r) => ({ id: r.id, kind: r.kind, payload: r.payload })),
+    );
+    const transport = makeTransport();
+    const store = makeStore();
+
+    const drainResult = await drainQueue({
+      userId: USER_ID,
+      queue: drainableQueue,
+      subscriptions: [makeSubscription()],
+      transport,
+      store,
+      now,
+    });
+
+    // Two claimed digest rows batch into exactly one send.
+    expect(drainResult).toEqual({ claimed: 2, sent: 1, failed: 0 });
+    expect(transport.sentPayloads).toHaveLength(1);
+    expect(transport.sentPayloads[0].body).toContain("First Book");
+    expect(transport.sentPayloads[0].body).toContain("Second Book");
+  });
+
   // --- Critical 1 & the writer/reader contract -----------------------------
 
   it("accepts and sends a date_change row whose provider is null, as diffSnapshots (src/lib/refresh/diff.ts) actually produces on a date withdrawal", async () => {
