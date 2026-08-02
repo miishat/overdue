@@ -86,6 +86,14 @@ export const drizzleSeenStore: SeenStore = {
     const bookIds = mergeTrackedBookIds(directBookIds, seriesReachableBookIds);
     if (bookIds.length === 0) return [];
 
+    // The SQL boundary here (gt) and the strict "> sinceMs" check
+    // changedBookIds applies again in TypeScript are deliberately redundant.
+    // This is defensive, not accidental duplication: if this query's
+    // operator were ever changed from gt to gte (e.g. during a refactor),
+    // rows observed exactly at the baseline would leak through here, but
+    // changedBookIds' own strict-greater-than check would still exclude
+    // them, so the "only strictly-after counts as new" rule holds either
+    // way. Safe to leave both in place.
     const whereClause =
       since === null
         ? and(eq(changeLog.entityType, "book"), inArray(changeLog.entityId, bookIds))

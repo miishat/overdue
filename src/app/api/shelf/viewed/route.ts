@@ -28,14 +28,28 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "viewedAt is required" }, { status: 400 });
   }
 
-  const at = new Date(body.viewedAt);
-  if (Number.isNaN(at.getTime())) {
+  const posted = new Date(body.viewedAt);
+  if (Number.isNaN(posted.getTime())) {
     return Response.json({ error: "viewedAt is not a valid date" }, {
       status: 400,
     });
   }
 
   const userId = await getCurrentUserId();
+
+  const now = new Date();
+  const existingBaseline = await drizzleSeenStore.lastViewedAt(userId);
+
+  // Clamp down: never accept a client-supplied timestamp later than the
+  // server's own clock, so a bogus far-future value cannot permanently
+  // suppress future badges.
+  let at = posted.getTime() > now.getTime() ? now : posted;
+  // Clamp up: never move the baseline backwards from what is already
+  // stored, preserving monotonicity.
+  if (existingBaseline !== null && at.getTime() < existingBaseline.getTime()) {
+    at = existingBaseline;
+  }
+
   await drizzleSeenStore.markViewed(userId, at);
 
   return Response.json({ ok: true }, { status: 200 });

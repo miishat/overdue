@@ -23,7 +23,11 @@ export default async function Home() {
     loadShelf(drizzleShelfSource, now),
     drizzleSeenStore.lastViewedAt(userId),
   ]);
-  const changeRows = await drizzleSeenStore.changesSince(userId, since);
+  // A null baseline means the user has never opened the shelf, and
+  // changedBookIds discards everything in that case anyway (see its doc
+  // comment), so skip the query rather than running it just to throw the
+  // result away.
+  const changeRows = since === null ? [] : await drizzleSeenStore.changesSince(userId, since);
   const changedIds = changedBookIds({ rows: changeRows, since });
 
   return (

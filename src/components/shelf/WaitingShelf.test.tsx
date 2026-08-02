@@ -69,4 +69,27 @@ describe("WaitingShelf", () => {
     );
     expect(screen.getAllByText("A Book")).toHaveLength(2);
   });
+
+  it("wires changedIds through to the badge on the right row only", () => {
+    render(
+      <WaitingShelf
+        entries={[
+          entry({ key: "a", bookId: "b1", title: "Changed Book" }),
+          entry({ key: "b", bookId: "b2", title: "Unchanged Book" }),
+        ]}
+        now={NOW}
+        changedIds={new Set(["b1"])}
+      />,
+    );
+
+    const changedRow = screen.getByText("Changed Book").closest("div[class*='grid']");
+    const unchangedRow = screen
+      .getByText("Unchanged Book")
+      .closest("div[class*='grid']");
+
+    expect(changedRow).not.toBeNull();
+    expect(unchangedRow).not.toBeNull();
+    expect(changedRow?.querySelector("[data-badge='changed']")).toBeTruthy();
+    expect(unchangedRow?.querySelector("[data-badge='changed']")).toBeNull();
+  });
 });
