@@ -42,6 +42,20 @@ export default defineConfig({
     // that server instead of starting its own, and the suite still fails
     // with 401s. The owner must stop any already-running dev server
     // before running the e2e suite.
-    env: { SITE_GATE_SECRET: "" },
+    //
+    // CRON_SECRET is unset on the developer's own machine (nothing there
+    // schedules /api/refresh yet), and the route intentionally answers 503
+    // when it is unset rather than accepting any request. tests/e2e/
+    // refresh.spec.ts needs a real, known secret to exercise the 401/200
+    // paths, so one is set here, scoped to the server process Playwright
+    // starts, the same way SITE_GATE_SECRET is overridden above. This does
+    // not touch the route's own logic: a missing CRON_SECRET still 503s in
+    // every other environment. Same known limitation as SITE_GATE_SECRET:
+    // reuseExistingServer:true means an already-running `pnpm dev` on port
+    // 3000 keeps whatever CRON_SECRET (or lack of one) it started with.
+    env: {
+      SITE_GATE_SECRET: "",
+      CRON_SECRET: "e2e-test-cron-secret-not-a-real-credential",
+    },
   },
 });
