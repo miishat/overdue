@@ -92,11 +92,12 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await runRefresh(drizzleRefreshPort, new Date());
+  const now = new Date();
+  const result = await runRefresh(drizzleRefreshPort, now);
 
   // The drain runs after the refresh, not before: an alert must never be
   // sent for a change whose history row has not been durably written yet.
-  const drainResult = await runDrain(new Date());
+  const drainResult = await runDrain(now);
 
   // Counts only. Never echo request headers or anything derived from the
   // secret comparison, and never include per-failure provider error text

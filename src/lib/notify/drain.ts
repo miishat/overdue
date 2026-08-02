@@ -1,5 +1,6 @@
 import type { DatePrecision } from "@/db/schema/enums";
 import type { StoredSubscription, SubscriptionStore } from "@/lib/push/subscriptions";
+import type { DateChangeQueuePayload } from "@/lib/refresh/run";
 import { buildDateChangeAlert } from "./alert";
 import { buildDigest, type DigestItem } from "./digest";
 import type { PushPayload } from "./payload";
@@ -26,26 +27,19 @@ function isPrecisionOrNullish(value: unknown): value is DatePrecision | null | u
 }
 
 /**
- * The shape `runRefresh` (src/lib/refresh/run.ts) actually writes under kind
- * "date_change". It carries no book title, only the fields the diff produced,
- * so the alert built from it uses a generic stand-in title rather than one
- * that does not exist at this boundary.
- */
-interface DateChangeQueuePayload {
-  bookId: string;
-  from: string | null;
-  to: string | null;
-  fromPrecision?: DatePrecision | null;
-  toPrecision?: DatePrecision | null;
-  provider?: string;
-}
-
-/**
  * Narrows the untrusted `unknown` queue payload before use, mirroring
  * isReadStateValue (src/lib/read-state.ts) and isPushPayload
  * (src/lib/notify/payload.ts): the row was written by a possibly older
  * process, so it is validated rather than cast, and a malformed row is
  * rejected instead of throwing.
+ *
+ * `provider` is deliberately NOT validated here: DateChangeQueuePayload
+ * (shared with src/lib/refresh/run.ts, the only writer) types it as
+ * `ProviderName | null`, but drainQueue never reads it, only bookId,
+ * bookTitle, from, to, fromPrecision, and toPrecision feed buildDateChangeAlert.
+ * Validating a field only to discard it buys nothing and risks rejecting a
+ * value the writer legitimately produces (the null-provider withdrawal case)
+ * if the check ever drifts from the writer's real type again.
  */
 function isDateChangeQueuePayload(value: unknown): value is DateChangeQueuePayload {
   if (typeof value !== "object" || value === null) return false;
@@ -54,11 +48,13 @@ function isDateChangeQueuePayload(value: unknown): value is DateChangeQueuePaylo
   if (typeof candidate.bookId !== "string" || candidate.bookId.length === 0) {
     return false;
   }
+  if (typeof candidate.bookTitle !== "string" || candidate.bookTitle.length === 0) {
+    return false;
+  }
   if (candidate.from !== null && typeof candidate.from !== "string") return false;
   if (candidate.to !== null && typeof candidate.to !== "string") return false;
   if (!isPrecisionOrNullish(candidate.fromPrecision)) return false;
   if (!isPrecisionOrNullish(candidate.toPrecision)) return false;
-  if (candidate.provider !== undefined && typeof candidate.provider !== "string") return false;
 
   return true;
 }
@@ -84,11 +80,6 @@ function isDigestItemQueuePayload(value: unknown): value is DigestItem {
 
   return true;
 }
-
-// The queue payload carries no book title (see DateChangeQueuePayload), so
-// the alert body falls back to this rather than asserting a name it was
-// never given.
-const FALLBACK_BOOK_TITLE = "A book you're tracking";
 
 /**
  * Drains a user's unsent notification_queue rows and sends them.
@@ -118,15 +109,22 @@ export async function drainQueue(input: {
   const payloads: PushPayload[] = [];
   const digestItems: DigestItem[] = [];
 
+  // Rows skipped for a malformed payload or an unrecognised kind are counted
+  // into `failed` below, alongside send failures: a claimed row that never
+  // produces a notification is a loss either way, and the response body must
+  // show it in the one counter operators actually look at.
+  let skipped = 0;
+
   for (const row of rows) {
     if (row.kind === "date_change") {
       if (!isDateChangeQueuePayload(row.payload)) {
         console.error(`drainQueue: skipping malformed date_change row ${row.id}`);
+        skipped += 1;
         continue;
       }
       payloads.push(
         buildDateChangeAlert({
-          bookTitle: FALLBACK_BOOK_TITLE,
+          bookTitle: row.payload.bookTitle,
           bookId: row.payload.bookId,
           from: row.payload.from,
           to: row.payload.to,
@@ -137,11 +135,13 @@ export async function drainQueue(input: {
     } else if (row.kind === "digest") {
       if (!isDigestItemQueuePayload(row.payload)) {
         console.error(`drainQueue: skipping malformed digest row ${row.id}`);
+        skipped += 1;
         continue;
       }
       digestItems.push(row.payload);
     } else {
       console.error(`drainQueue: skipping row ${row.id} with unrecognised kind "${row.kind}"`);
+      skipped += 1;
     }
   }
 
@@ -152,7 +152,7 @@ export async function drainQueue(input: {
   }
 
   let sent = 0;
-  let failed = 0;
+  let failed = skipped;
 
   for (const payload of payloads) {
     const result = await sendToAll({ subscriptions, payload, transport, store, now });

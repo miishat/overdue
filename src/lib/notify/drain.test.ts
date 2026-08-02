@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StoredSubscription, SubscriptionStore } from "@/lib/push/subscriptions";
+import { runRefresh, type RefetchedBook, type RefreshPort } from "@/lib/refresh/run";
+import type { BookSnapshot } from "@/lib/refresh/snapshot";
 import { drainQueue } from "./drain";
 import type { PushPayload } from "./payload";
 import type { NotificationQueuePort, QueuedNotification } from "./queue";
@@ -98,12 +100,70 @@ function dateChangeRow(id: string, bookId = "book-1") {
     kind: "date_change",
     payload: {
       bookId,
+      bookTitle: "A Book",
       from: "2026-01-01",
       to: "2026-03-01",
       fromPrecision: "day",
       toPrecision: "day",
       provider: "hardcover",
     },
+  };
+}
+
+/**
+ * Runs the real runRefresh with a minimal fake RefreshPort and returns
+ * whatever it enqueued under "date_change", so a test can feed drainQueue
+ * the writer's actual field set instead of a hand-written fixture. This is
+ * what pins the run.ts-to-drain.ts contract: if the two shapes ever drift
+ * again, this test fails instead of two hand-maintained fixtures quietly
+ * staying in sync with each other but not with the real writer.
+ */
+async function enqueuedDateChangePayload(overrides: {
+  before: BookSnapshot;
+  after: BookSnapshot;
+}): Promise<unknown> {
+  const queued: Array<{ kind: string; payload: unknown }> = [];
+  const refetched: RefetchedBook = { snapshot: overrides.after, resolution: {} };
+
+  const port: RefreshPort = {
+    async candidates() {
+      return [{ bookId: overrides.before.bookId, lastRefreshedAt: null, seriesId: null }];
+    },
+    async currentSnapshot() {
+      return overrides.before;
+    },
+    async refetchSnapshot() {
+      return refetched;
+    },
+    async writeChanges() {},
+    async commitRefetched() {
+      return overrides.after;
+    },
+    async markRefreshed() {},
+    async enqueue(_userId, kind, payload) {
+      queued.push({ kind, payload });
+    },
+  };
+
+  await runRefresh(port, now);
+
+  const dateChange = queued.find((q) => q.kind === "date_change");
+  if (!dateChange) throw new Error("runRefresh did not enqueue a date_change row");
+  return dateChange.payload;
+}
+
+function baseSnapshot(overrides: Partial<BookSnapshot> = {}): BookSnapshot {
+  return {
+    bookId: "book-1",
+    title: "Withdrawn Book",
+    seriesId: null,
+    seriesPosition: null,
+    coverUrl: null,
+    releaseDate: "2027-09-01",
+    datePrecision: "season",
+    status: "ESTIMATED",
+    sourceProvider: "wikidata",
+    ...overrides,
   };
 }
 
@@ -277,7 +337,7 @@ describe("drainQueue", () => {
     expect(transport.sentPayloads).toEqual([]);
   });
 
-  it("skips a malformed payload row without throwing and without stopping the rest", async () => {
+  it("skips a malformed payload row without throwing, counts it as failed, and still sends the rest", async () => {
     const queue = makeQueue([
       { id: "row-1", kind: "date_change", payload: { unexpected: true } },
       dateChangeRow("row-2", "book-2"),
@@ -294,13 +354,17 @@ describe("drainQueue", () => {
       now,
     });
 
-    expect(result).toEqual({ claimed: 2, sent: 1, failed: 0 });
+    expect(result).toEqual({ claimed: 2, sent: 1, failed: 1 });
     expect(transport.sentPayloads).toHaveLength(1);
   });
 
-  it("skips a row with an unrecognised kind", async () => {
+  // Both rows here carry a WELL-FORMED date-change payload, so a mutation
+  // that changes kind dispatch (e.g. `row.kind === "date_change"` becoming
+  // `row.kind !== "digest"`) is caught by dispatch itself rather than by the
+  // malformed-payload path, which is what let a broken mutant pass before.
+  it("skips a row with an unrecognised kind and counts it as failed", async () => {
     const queue = makeQueue([
-      { id: "row-1", kind: "digset", payload: { anything: true } },
+      { id: "row-1", kind: "digset", payload: dateChangeRow("unused", "book-1").payload },
       dateChangeRow("row-2", "book-2"),
     ]);
     const transport = makeTransport();
@@ -315,7 +379,38 @@ describe("drainQueue", () => {
       now,
     });
 
-    expect(result).toEqual({ claimed: 2, sent: 1, failed: 0 });
+    expect(result).toEqual({ claimed: 2, sent: 1, failed: 1 });
     expect(transport.sentPayloads).toHaveLength(1);
+  });
+
+  // --- Critical 1 & the writer/reader contract -----------------------------
+
+  it("accepts and sends a date_change row whose provider is null, as diffSnapshots (src/lib/refresh/diff.ts) actually produces on a date withdrawal", async () => {
+    const payload = await enqueuedDateChangePayload({
+      before: baseSnapshot({ releaseDate: "2027-09-01", datePrecision: "season", sourceProvider: "wikidata" }),
+      after: baseSnapshot({ releaseDate: null, datePrecision: null, sourceProvider: null }),
+    });
+
+    // The real writer's output carries provider: null for a withdrawal.
+    // Sanity-check the fixture actually exercises that case before trusting
+    // the assertion below.
+    expect((payload as { provider: unknown }).provider).toBeNull();
+
+    const queue = makeQueue([{ id: "row-1", kind: "date_change", payload }]);
+    const transport = makeTransport();
+    const store = makeStore();
+
+    const result = await drainQueue({
+      userId: USER_ID,
+      queue,
+      subscriptions: [makeSubscription()],
+      transport,
+      store,
+      now,
+    });
+
+    expect(result).toEqual({ claimed: 1, sent: 1, failed: 0 });
+    expect(transport.sentPayloads).toHaveLength(1);
+    expect(transport.sentPayloads[0].body).toContain("Withdrawn Book");
   });
 });

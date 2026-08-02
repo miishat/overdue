@@ -1,7 +1,33 @@
+import type { DatePrecision, ProviderName } from "@/db/schema/enums";
 import { getCurrentUserId } from "@/lib/current-user";
 import { RELEASE_DATE_FIELD, diffSnapshots, type ChangeRow } from "./diff";
 import { selectSlice, type Sliceable } from "./slice";
 import type { BookSnapshot } from "./snapshot";
+
+/**
+ * The exact shape enqueued under kind "date_change", shared with
+ * src/lib/notify/drain.ts so the writer and the reader cannot drift. drain.ts
+ * imports this type (type-only, no runtime dependency) and validates
+ * incoming queue rows against it, so a field added or renamed here shows up
+ * as a type error in drain.ts rather than as a payload silently rejected or
+ * misread at drain time.
+ *
+ * `provider` mirrors ChangeRow.provider (src/lib/refresh/diff.ts): it is
+ * `ProviderName | null`, never plain `undefined`, because diffSnapshots
+ * always sets it from `after.sourceProvider`, which is `null` (not absent)
+ * whenever the book has no release row or a release with no sources. The
+ * withdrawal case (`to: null`) is exactly when this is null: the release row
+ * is gone, so there is no provider to report.
+ */
+export interface DateChangeQueuePayload {
+  bookId: string;
+  bookTitle: string;
+  from: string | null;
+  to: string | null;
+  fromPrecision?: DatePrecision | null;
+  toPrecision?: DatePrecision | null;
+  provider: ProviderName | null;
+}
 
 /**
  * Everything the run touches, injected.
@@ -160,16 +186,18 @@ export async function runRefresh(
         // has not been written yet.
         const dateMove = diff.find((r) => r.field === RELEASE_DATE_FIELD);
         if (dateMove) {
+          const payload: DateChangeQueuePayload = {
+            bookId: candidate.bookId,
+            bookTitle: after.title,
+            from: dateMove.oldValue,
+            to: dateMove.newValue,
+            fromPrecision: dateMove.oldValue === null ? null : before.datePrecision,
+            toPrecision: dateMove.newValue === null ? null : after.datePrecision,
+            provider: dateMove.provider,
+          };
           pendingAlerts.push({
             bookId: candidate.bookId,
-            payload: {
-              bookId: candidate.bookId,
-              from: dateMove.oldValue,
-              to: dateMove.newValue,
-              fromPrecision: dateMove.oldValue === null ? null : before.datePrecision,
-              toPrecision: dateMove.newValue === null ? null : after.datePrecision,
-              provider: dateMove.provider,
-            },
+            payload,
           });
         }
       }
