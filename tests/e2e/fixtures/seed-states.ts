@@ -7,6 +7,7 @@ import { notificationQueue, pushSubscriptions } from "@/db/schema/push";
 import { releases, releaseSources } from "@/db/schema/releases";
 import { tracks } from "@/db/schema/tracking";
 import { LOCAL_USER_ID } from "@/lib/current-user";
+import type { MetadataProvider } from "@/providers/types";
 
 /**
  * Fixed, hardcoded ids for the end-to-end fixture. Never generated at
@@ -87,53 +88,119 @@ const ALL_SERIES_IDS = [
 
 /**
  * Task 17 fixture: one tracked book whose refetched snapshot genuinely
- * differs from what is stored, so a real refresh run produces a real diff
- * rather than one asserted against fake data in a unit test.
+ * differs from what is stored, so a refresh run produces a real diff written
+ * by the real code against the real database.
  *
- * The book is seeded with a WRONG release_date and linked, via a real
- * external_ids row, to Wikidata's entity for "Pride and Prejudice" (Q170583),
- * which carries a stable, long-settled P577 publication date
- * (1813-01-28, precision "day" per src/providers/wikidata.ts's
- * precisionFromWikidata: any precision code other than "9" or "10" maps to
- * "day", and Wikidata's statement uses precision 11). A refresh run calls the
- * real wikidataProvider.getBook against this fixed id, so the "external
- * provider changing the date underneath us" the task brief describes is not
- * simulated with a mock: refreshing this book really does correct a stored
- * value using a real, independent source, and a historical book's publication
- * date is as close to immovable as any live external fact can be.
+ * The book is seeded with a deliberately wrong release_date ("1900-01-01",
+ * precision "year") and one external_ids row naming a provider id that
+ * belongs to nothing real. refresh.spec.ts drives the run through
+ * createDrizzleRefreshPort with REFRESH_FIXTURE_REGISTRY below, so the
+ * "external provider moved the date underneath us" case is produced by a
+ * fixture adapter rather than by a live HTTP call.
  *
- * This is deliberately NOT run through the shelf's title/series display path;
- * the seeded title is overwritten by the real "Pride and Prejudice" title on
- * the first refresh, which is expected and does not affect any assertion
- * here, since refresh.spec.ts scopes every change_log assertion to this
- * book's id, never its title.
+ * WHY NOT A LIVE PROVIDER. An earlier version of this fixture pointed at
+ * Wikidata's real entity for "Pride and Prejudice" and let a refresh call
+ * query.wikidata.org for real. That put a live provider call on the CI path
+ * (.github/workflows/ci.yml runs pnpm test:e2e on every push and PR), which
+ * the milestone's Global Constraint forbids outright, and which this
+ * codebase already rules out in its own words: vitest.config.ts quarantines
+ * *.live.test.ts behind pnpm test:live precisely because those files "must
+ * never run as part of the default suite or in CI". The literal
+ * "release_date" reaching Postgres and being read back is proved instead by
+ * seedReleaseDateHistory below plus the reader assertion in refresh.spec.ts,
+ * neither of which needs a provider at all.
+ *
+ * The external id is deliberately unresolvable by any real adapter, so even
+ * a future caller that hands this fixture the production registry by mistake
+ * gets nothing back rather than silently reaching the network for a real
+ * entity.
  */
-// Deliberately the lowest-sorting id block in this fixture file (leading
-// "00000000" rather than the "eeeeeeee" the other fixtures use). runRefresh
-// (src/lib/refresh/slice.ts selectSlice) orders never-refreshed candidates
-// by bookId ascending as its tie-break, and this endpoint's slice is bounded
-// to DEFAULT_SLICE_SIZE (25). The developer's own, real tracked books share
-// this database and may also have lastRefreshedAt: null (nothing has ever
-// scheduled this endpoint before Task 17), so without a deliberately
-// low-sorting id this book could be crowded out of the slice by real data and
-// the refresh spec's assertions would silently never run against it. A
-// random v4 UUID starting this low is astronomically unlikely, so this id
-// sorts first with overwhelming certainty.
 const REFRESH_BOOK_ID = "00000000-1111-4000-8000-000000000001";
 const REFRESH_RELEASE_ID = "eeeeeeee-1111-4000-8000-000000000002";
 const REFRESH_EXTERNAL_ID_ROW_ID = "eeeeeeee-1111-4000-8000-000000000003";
 const REFRESH_RELEASE_SOURCE_ID = "eeeeeeee-1111-4000-8000-000000000004";
 const REFRESH_TRACK_ID = "eeeeeeee-1111-4000-8000-000000000005";
 
-// The real Wikidata entity refresh.spec.ts relies on; see the comment above.
-const REFRESH_WIKIDATA_QID = "Q170583";
+/**
+ * The (provider, externalId) pair that maps this fixture book in
+ * external_ids. It must stay present and stay pointing at REFRESH_BOOK_ID:
+ * persistResolvedBook's findExistingBookId matches on exactly this pair, and
+ * without it a write-back would insert a brand new book row instead of
+ * updating the fixture's.
+ */
+const REFRESH_EXTERNAL_ID = "E2E-FIXTURE-NOT-A-REAL-WIKIDATA-ENTITY";
+
+const REFRESH_SEEDED_DATE = "1900-01-01";
+
+/**
+ * What the fixture adapter reports. Computed from the current year rather
+ * than hardcoded so the corrected date stays comfortably in the future and
+ * the derived status never flips as real time passes, and computed ONCE at
+ * module load so both runs in the idempotence test see the same value.
+ */
+const REFRESH_CORRECTED_DATE = `${new Date().getUTCFullYear() + 2}-06-15`;
 
 export const REFRESH_FIXTURE = {
   bookId: REFRESH_BOOK_ID,
   seededTitle: "E2E Refresh Target Book",
-  // What providers correct the seeded release date to, once wikidata answers.
-  correctedTitle: "Pride and Prejudice",
+  seededDate: REFRESH_SEEDED_DATE,
+  correctedDate: REFRESH_CORRECTED_DATE,
+  externalId: REFRESH_EXTERNAL_ID,
 };
+
+function unsupported(method: string): never {
+  throw new Error(
+    `refresh fixture adapter: ${method} must never be called by a refresh run`,
+  );
+}
+
+/**
+ * A MetadataProvider that answers from memory and never opens a socket.
+ *
+ * It carries the "wikidata" name because that is the provider recorded on
+ * the fixture's external_ids and release_sources rows, and fetchKnownSources
+ * looks an adapter up by name. Every method other than getBook throws: a
+ * refresh must only ever call getBook, and a silent empty answer from the
+ * others would hide a change in that contract.
+ *
+ * `authors` is deliberately empty. persistResolvedBook's upsertAuthors
+ * inserts into `authors`, which has no foreign key to `books`, so any author
+ * name here would leave a row that clearSeeded could not remove without
+ * deleting by a predicate that might match one of the developer's real
+ * authors. Emitting none means none is created.
+ */
+export const REFRESH_FIXTURE_PROVIDER: MetadataProvider = {
+  name: "wikidata",
+  official: true,
+  async searchBooks() {
+    unsupported("searchBooks");
+  },
+  async getBook(externalId) {
+    if (externalId !== REFRESH_EXTERNAL_ID) return null;
+    return {
+      provider: "wikidata",
+      externalId: REFRESH_EXTERNAL_ID,
+      // Identical to the seeded title on purpose, so the only fields the
+      // diff can report are the date fields and the status they derive.
+      title: REFRESH_FIXTURE.seededTitle,
+      authors: [],
+      releaseDate: REFRESH_CORRECTED_DATE,
+      datePrecision: "day",
+      sourceUrl: "https://e2e.overdue.test/fixture-entity",
+    };
+  },
+  async getSeries() {
+    unsupported("getSeries");
+  },
+  async getSeriesEntries() {
+    unsupported("getSeriesEntries");
+  },
+};
+
+/** The whole adapter set a fixture-scoped refresh run is allowed to see. */
+export const REFRESH_FIXTURE_REGISTRY: MetadataProvider[] = [
+  REFRESH_FIXTURE_PROVIDER,
+];
 
 /**
  * Task 17 fixture: two push subscriptions covering the health states
@@ -183,12 +250,29 @@ export async function clearSeeded(): Promise<void> {
   await db
     .delete(releaseSources)
     .where(inArray(releaseSources.id, [...ALL_RELEASE_SOURCE_IDS, REFRESH_RELEASE_SOURCE_ID]));
+  // persistResolvedBook DELETEs and re-INSERTs a release's source rows, and
+  // the replacements get server generated ids, so the fixed id above no
+  // longer matches them after a refresh has committed. Scoping this second
+  // delete by release id is exactly as safe: REFRESH_RELEASE_ID is one of
+  // our own hardcoded ids and no other release can ever equal it.
+  await db
+    .delete(releaseSources)
+    .where(eq(releaseSources.releaseId, REFRESH_RELEASE_ID));
   await db
     .delete(releases)
     .where(inArray(releases.id, [...ALL_RELEASE_IDS, REFRESH_RELEASE_ID]));
+  // Same reasoning again: persistResolvedBook inserts external_ids rows with
+  // server generated ids for every source it commits, so the fixed row id
+  // is not enough on its own. entity_id is one of our hardcoded book ids.
   await db
     .delete(externalIds)
     .where(inArray(externalIds.id, [REFRESH_EXTERNAL_ID_ROW_ID]));
+  await db.delete(externalIds).where(eq(externalIds.entityId, REFRESH_BOOK_ID));
+  // book_authors would be cleaned here too, but the fixture cannot create
+  // one: REFRESH_FIXTURE_PROVIDER reports no authors, precisely so that
+  // upsertAuthors never inserts into `authors`, which has no foreign key to
+  // `books` and therefore could not be cleaned up by any id this file owns.
+  // Nothing in this function deletes an author row, by id or by predicate.
   await db.delete(books).where(inArray(books.id, [...ALL_BOOK_IDS, REFRESH_BOOK_ID]));
   await db.delete(series).where(inArray(series.id, ALL_SERIES_IDS));
 
@@ -209,6 +293,21 @@ export async function clearSeeded(): Promise<void> {
   await db
     .delete(pushSubscriptions)
     .where(inArray(pushSubscriptions.id, [SETTINGS_SUB_HEALTHY_ID, SETTINGS_SUB_FAILING_ID]));
+  // The upsert test in refresh.spec.ts calls drizzleSubscriptionStore.upsert,
+  // which generates its own id. If the upsert's conflict target ever stopped
+  // matching the unique index (exactly the defect that test exists to catch)
+  // the call would INSERT rather than update, and the id list above would not
+  // reach the new row. These two endpoints are hardcoded above and are not
+  // valid push endpoints for any real device, so deleting by them cannot
+  // match one of the developer's own subscriptions.
+  await db
+    .delete(pushSubscriptions)
+    .where(
+      inArray(pushSubscriptions.endpoint, [
+        SETTINGS_FIXTURE.healthyEndpoint,
+        SETTINGS_FIXTURE.failingEndpoint,
+      ]),
+    );
 }
 
 /**
@@ -337,12 +436,12 @@ export async function seedAllStates(): Promise<void> {
 
 /**
  * Seeds the Task 17 refresh fixture: a tracked book whose stored release
- * date is deliberately wrong (an arbitrary year, "1900-01-01") and whose
- * only known external source is the real Wikidata entity for "Pride and
- * Prejudice". A refresh run re-fetches that entity for real and corrects the
- * date, producing a genuine change_log row rather than one written by the
- * test itself. See REFRESH_FIXTURE's comment above for why this book, and
- * refresh.spec.ts for the assertions built on it.
+ * date is deliberately wrong ("1900-01-01") and whose only known external
+ * source is the fixture adapter's unresolvable id. A refresh run driven with
+ * REFRESH_FIXTURE_REGISTRY corrects the date, producing a genuine change_log
+ * row written by the real diff, the real port and the real database, rather
+ * than one written by the test itself. See REFRESH_FIXTURE's comment above,
+ * and refresh.spec.ts for the assertions built on it.
  */
 export async function seedRefreshFixture(): Promise<void> {
   await db.insert(books).values({
@@ -357,7 +456,7 @@ export async function seedRefreshFixture(): Promise<void> {
     bookId: REFRESH_BOOK_ID,
     region: "US",
     format: "hardcover",
-    date: "1900-01-01",
+    date: REFRESH_SEEDED_DATE,
     datePrecision: "year",
     status: "RELEASED",
   });
@@ -366,19 +465,21 @@ export async function seedRefreshFixture(): Promise<void> {
     id: REFRESH_RELEASE_SOURCE_ID,
     releaseId: REFRESH_RELEASE_ID,
     provider: "wikidata",
-    valueSeen: "1900-01-01",
+    valueSeen: REFRESH_SEEDED_DATE,
     trustRank: 70,
   });
 
-  // The (provider, externalId) pair drizzleRefreshPort's loadKnownSources
-  // reads to decide which providers to re-fetch. This is what actually
-  // drives the real network call to Wikidata during refresh.
+  // The (provider, externalId) pair the port's loadKnownSources reads to
+  // decide which adapters to re-fetch, and the row persistResolvedBook's
+  // findExistingBookId matches on so the write-back updates this book
+  // rather than inserting a new one. The external id resolves to nothing in
+  // any real provider; only REFRESH_FIXTURE_PROVIDER answers for it.
   await db.insert(externalIds).values({
     id: REFRESH_EXTERNAL_ID_ROW_ID,
     entityType: "book",
     entityId: REFRESH_BOOK_ID,
     provider: "wikidata",
-    externalId: REFRESH_WIKIDATA_QID,
+    externalId: REFRESH_EXTERNAL_ID,
   });
 
   await db.insert(tracks).values({
@@ -432,4 +533,73 @@ export async function changeLogCountFor(bookId: string, field?: string): Promise
     .from(changeLog)
     .where(eq(changeLog.entityId, bookId));
   return field ? rows.filter((r) => r.field === field).length : rows.length;
+}
+
+/** The release date currently stored for a book, read straight from Postgres. */
+export async function storedReleaseDateFor(bookId: string): Promise<string | null> {
+  const rows = await db
+    .select({ date: releases.date })
+    .from(releases)
+    .where(eq(releases.bookId, bookId))
+    .limit(1);
+  return rows[0]?.date ?? null;
+}
+
+/**
+ * The literal history row the read path must find, written with the STRING
+ * "release_date" rather than with RELEASE_DATE_FIELD.
+ *
+ * src/lib/changes.ts imports RELEASE_DATE_FIELD from src/lib/refresh/diff.ts,
+ * so reader and writer already share one constant and a rename is a compile
+ * error, not a silent drift. What that shared constant cannot prove is that
+ * the literal actually reaching the `field` column of Postgres, and coming
+ * back out of it, is "release_date". Hardcoding the string here means this
+ * fixture keeps testing the real literal even if the constant were ever
+ * changed, and Book detail rendering the move proves the whole round trip:
+ * literal in, column, query, dateChangesFrom's filter, page.
+ */
+export const HISTORY_FIXTURE = {
+  bookId: REFRESH_BOOK_ID,
+  from: "2026-03-01",
+  to: "2026-09-15",
+  provider: "wikidata" as const,
+};
+
+export async function seedReleaseDateHistory(): Promise<void> {
+  await db.insert(changeLog).values({
+    entityType: "book",
+    entityId: HISTORY_FIXTURE.bookId,
+    field: "release_date",
+    oldValue: HISTORY_FIXTURE.from,
+    newValue: HISTORY_FIXTURE.to,
+    provider: HISTORY_FIXTURE.provider,
+  });
+}
+
+/**
+ * Every push_subscriptions row currently stored under one endpoint. Returns
+ * a list rather than a single row on purpose: the upsert test's whole point
+ * is to detect a SECOND row appearing, which a `.limit(1)` read would hide.
+ */
+export async function subscriptionsByEndpoint(endpoint: string): Promise<
+  Array<{
+    id: string;
+    userAgent: string | null;
+    p256dh: string;
+    auth: string;
+    failureCount: number;
+    lastFailureAt: Date | null;
+  }>
+> {
+  return db
+    .select({
+      id: pushSubscriptions.id,
+      userAgent: pushSubscriptions.userAgent,
+      p256dh: pushSubscriptions.p256dh,
+      auth: pushSubscriptions.auth,
+      failureCount: pushSubscriptions.failureCount,
+      lastFailureAt: pushSubscriptions.lastFailureAt,
+    })
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.endpoint, endpoint));
 }

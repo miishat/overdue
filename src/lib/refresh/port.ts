@@ -10,6 +10,7 @@ import { getCurrentUserId } from "@/lib/current-user";
 import { DEFAULT_HIATUS_THRESHOLD_YEARS, mergeTrackedBookIds } from "@/lib/shelf";
 import { TRUST_RANK, persistResolvedBook } from "@/lib/persist";
 import { providers, OFFICIAL_PROVIDERS } from "@/providers/registry";
+import type { MetadataProvider } from "@/providers/types";
 import { resolveGroup, type ResolvedBook } from "@/resolution/resolve";
 import { deriveStatus } from "@/resolution/status";
 import { tracks } from "@/db/schema/tracking";
@@ -257,167 +258,185 @@ function asResolvedBook(resolution: unknown, bookId: string): ResolvedBook {
  * and commitRefetched is a separate, later step. In short: change_log is
  * append-only history, and a change that is committed to books/releases before
  * its history row is written is permanently lost if the run dies in between.
+ *
+ * The provider registry is a parameter rather than a module-level import so
+ * that the adapter set a refresh re-fetches through can be supplied by the
+ * caller. Everything else about the port stays real: the same candidate
+ * query, the same stored-snapshot read, the same prediction, the same
+ * persist and the same read-back. This mirrors the injection the rest of the
+ * refresh code already uses (fetchKnownSources, searchAcross and
+ * getSeriesEntriesFromProviders all take their adapter list as an argument
+ * and have module-level convenience wrappers), and it is what lets the
+ * end-to-end suite exercise the real database path without any live provider
+ * call. Production keeps the default.
  */
-export const drizzleRefreshPort: RefreshPort = {
-  async candidates() {
-    const userId = await getCurrentUserId();
+export function createDrizzleRefreshPort(
+  registry: MetadataProvider[] = providers,
+): RefreshPort {
+  return {
+    async candidates() {
+      const userId = await getCurrentUserId();
 
-    const trackRows = await db
-      .select({ bookId: tracks.bookId, seriesId: tracks.seriesId })
-      .from(tracks)
-      .where(eq(tracks.userId, userId));
+      const trackRows = await db
+        .select({ bookId: tracks.bookId, seriesId: tracks.seriesId })
+        .from(tracks)
+        .where(eq(tracks.userId, userId));
 
-    const directBookIds = trackRows
-      .map((row) => row.bookId)
-      .filter((id): id is string => id !== null);
-    const trackedSeriesIds = trackRows
-      .map((row) => row.seriesId)
-      .filter((id): id is string => id !== null);
+      const directBookIds = trackRows
+        .map((row) => row.bookId)
+        .filter((id): id is string => id !== null);
+      const trackedSeriesIds = trackRows
+        .map((row) => row.seriesId)
+        .filter((id): id is string => id !== null);
 
-    const seriesReachableBookIds =
-      trackedSeriesIds.length === 0
-        ? []
-        : (
-            await db
-              .select({ bookId: books.id })
-              .from(books)
-              .where(inArray(books.seriesId, trackedSeriesIds))
-          ).map((row) => row.bookId);
+      const seriesReachableBookIds =
+        trackedSeriesIds.length === 0
+          ? []
+          : (
+              await db
+                .select({ bookId: books.id })
+                .from(books)
+                .where(inArray(books.seriesId, trackedSeriesIds))
+            ).map((row) => row.bookId);
 
-    const bookIds = mergeTrackedBookIds(directBookIds, seriesReachableBookIds);
-    if (bookIds.length === 0) return [];
+      const bookIds = mergeTrackedBookIds(directBookIds, seriesReachableBookIds);
+      if (bookIds.length === 0) return [];
 
-    return db
-      .select({
-        bookId: books.id,
-        seriesId: books.seriesId,
-        lastRefreshedAt: books.lastRefreshedAt,
-      })
-      .from(books)
-      .where(inArray(books.id, bookIds));
-  },
+      return db
+        .select({
+          bookId: books.id,
+          seriesId: books.seriesId,
+          lastRefreshedAt: books.lastRefreshedAt,
+        })
+        .from(books)
+        .where(inArray(books.id, bookIds));
+    },
 
-  async currentSnapshot(bookId, now) {
-    return loadStoredSnapshot(bookId, now);
-  },
+    async currentSnapshot(bookId, now) {
+      return loadStoredSnapshot(bookId, now);
+    },
 
-  async refetchSnapshot(bookId, now) {
-    const stored = await loadStoredSnapshot(bookId, now);
-    if (!stored) return null;
+    async refetchSnapshot(bookId, now) {
+      const stored = await loadStoredSnapshot(bookId, now);
+      if (!stored) return null;
 
-    const release = await loadStoredRelease(bookId);
-    const fetched = await fetchKnownSources(
-      providers,
-      await loadKnownSources(bookId),
-      release,
-    );
-    // No provider still knows this book. Returning null here is exactly the
-    // "providers no longer returning the book" case runRefresh already
-    // handles: it is treated as a successful, changeless refresh rather than
-    // a failure, so the book still gets marked refreshed and rotates to the
-    // back of the queue. Nothing is written, so a manual-only book keeps
-    // everything it has.
-    if (fetched.length === 0) return null;
+      const release = await loadStoredRelease(bookId);
+      const fetched = await fetchKnownSources(
+        registry,
+        await loadKnownSources(bookId),
+        release,
+      );
+      // No provider still knows this book. Returning null here is exactly the
+      // "providers no longer returning the book" case runRefresh already
+      // handles: it is treated as a successful, changeless refresh rather than
+      // a failure, so the book still gets marked refreshed and rotates to the
+      // back of the queue. Nothing is written, so a manual-only book keeps
+      // everything it has.
+      if (fetched.length === 0) return null;
 
-    const resolved = resolveGroup({ key: bookId, records: fetched });
+      const resolved = resolveGroup({ key: bookId, records: fetched });
 
-    return {
-      snapshot: await predictSnapshot(stored, resolved, now),
-      // Handed straight back to commitRefetched by runRefresh. Nothing is
-      // stored here, so overlapping runs cannot interfere and no ResolvedBook
-      // outlives the run that produced it.
-      resolution: resolved,
-    };
-  },
+      return {
+        snapshot: await predictSnapshot(stored, resolved, now),
+        // Handed straight back to commitRefetched by runRefresh. Nothing is
+        // stored here, so overlapping runs cannot interfere and no ResolvedBook
+        // outlives the run that produced it.
+        resolution: resolved,
+      };
+    },
 
-  async writeChanges(rows) {
-    if (rows.length === 0) return;
+    async writeChanges(rows) {
+      if (rows.length === 0) return;
 
-    await db.insert(changeLog).values(
-      rows.map((row) => ({
-        entityType: row.entityType,
-        entityId: row.entityId,
-        field: row.field,
-        oldValue: row.oldValue,
-        newValue: row.newValue,
-        provider: row.provider,
-      })),
-    );
-  },
+      await db.insert(changeLog).values(
+        rows.map((row) => ({
+          entityType: row.entityType,
+          entityId: row.entityId,
+          field: row.field,
+          oldValue: row.oldValue,
+          newValue: row.newValue,
+          provider: row.provider,
+        })),
+      );
+    },
 
-  /**
-   * DELIBERATE: this always persists, even when the predicted snapshot exactly
-   * equals the stored one. BookSnapshot covers seven watched fields; the
-   * resolution also carries isbn13, description, authors, external ids, and
-   * the per-provider release_sources rows, none of which are in the snapshot
-   * and all of which do genuinely need refreshing. Skipping the write on a
-   * snapshot match would silently stop refreshing all of them. The accepted
-   * cost is that releases.updated_at churns on every pass and release_sources
-   * is re-written each time. The read-back below makes an unnecessary write
-   * harmless: it produces no change rows.
-   */
-  async commitRefetched(bookId, resolution, now) {
-    const resolved = asResolvedBook(resolution, bookId);
+    /**
+     * DELIBERATE: this always persists, even when the predicted snapshot exactly
+     * equals the stored one. BookSnapshot covers seven watched fields; the
+     * resolution also carries isbn13, description, authors, external ids, and
+     * the per-provider release_sources rows, none of which are in the snapshot
+     * and all of which do genuinely need refreshing. Skipping the write on a
+     * snapshot match would silently stop refreshing all of them. The accepted
+     * cost is that releases.updated_at churns on every pass and release_sources
+     * is re-written each time. The read-back below makes an unnecessary write
+     * harmless: it produces no change rows.
+     */
+    async commitRefetched(bookId, resolution, now) {
+      const resolved = asResolvedBook(resolution, bookId);
 
-    {
-      // Pre-check, so the corruption is prevented rather than merely reported.
-      const owners = await db
-        .select({ entityId: externalIds.entityId })
-        .from(externalIds)
-        .where(
-          and(
-            eq(externalIds.entityType, "book"),
-            or(
-              ...resolved.sources.map((source) =>
-                and(
-                  eq(externalIds.provider, source.provider),
-                  eq(externalIds.externalId, source.externalId),
+      {
+        // Pre-check, so the corruption is prevented rather than merely reported.
+        const owners = await db
+          .select({ entityId: externalIds.entityId })
+          .from(externalIds)
+          .where(
+            and(
+              eq(externalIds.entityType, "book"),
+              or(
+                ...resolved.sources.map((source) =>
+                  and(
+                    eq(externalIds.provider, source.provider),
+                    eq(externalIds.externalId, source.externalId),
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      const foreign = owners.find((row) => row.entityId !== bookId);
-      if (foreign) {
-        throw new Error(
-          `refresh write-back would target book ${foreign.entityId} but the snapshot was read from ${bookId}`,
-        );
+          );
+        const foreign = owners.find((row) => row.entityId !== bookId);
+        if (foreign) {
+          throw new Error(
+            `refresh write-back would target book ${foreign.entityId} but the snapshot was read from ${bookId}`,
+          );
+        }
+
+        const written = await persistResolvedBook(resolved);
+        // findExistingBookId matches with or(...) across every source and takes
+        // limit 1 with no ordering. If any re-fetched ProviderBook carries an
+        // externalId that now maps to a DIFFERENT book row, persist writes to
+        // that row while this book's snapshot was read from the original: the
+        // wrong row is silently overwritten and this book's diff stays
+        // permanently empty. Throwing turns that cross-book corruption into a
+        // recorded per-book failure.
+        if (written.bookId !== bookId) {
+          throw new Error(
+            `refresh write-back resolved to book ${written.bookId} but the snapshot was read from ${bookId}`,
+          );
+        }
       }
 
-      const written = await persistResolvedBook(resolved);
-      // findExistingBookId matches with or(...) across every source and takes
-      // limit 1 with no ordering. If any re-fetched ProviderBook carries an
-      // externalId that now maps to a DIFFERENT book row, persist writes to
-      // that row while this book's snapshot was read from the original: the
-      // wrong row is silently overwritten and this book's diff stays
-      // permanently empty. Throwing turns that cross-book corruption into a
-      // recorded per-book failure.
-      if (written.bookId !== bookId) {
+      // The ACTUAL post-commit state, read back the same way currentSnapshot
+      // reads it, so runRefresh can diff it against the prediction. seriesId is
+      // the field that motivated this: upsertSeries INSERTS a series that
+      // predictSnapshot's read-only lookup could only see as null.
+      const actual = await loadStoredSnapshot(bookId, now);
+      if (!actual) {
         throw new Error(
-          `refresh write-back resolved to book ${written.bookId} but the snapshot was read from ${bookId}`,
+          `refresh write-back committed book ${bookId} but could not read it back`,
         );
       }
-    }
+      return actual;
+    },
 
-    // The ACTUAL post-commit state, read back the same way currentSnapshot
-    // reads it, so runRefresh can diff it against the prediction. seriesId is
-    // the field that motivated this: upsertSeries INSERTS a series that
-    // predictSnapshot's read-only lookup could only see as null.
-    const actual = await loadStoredSnapshot(bookId, now);
-    if (!actual) {
-      throw new Error(
-        `refresh write-back committed book ${bookId} but could not read it back`,
-      );
-    }
-    return actual;
-  },
+    async markRefreshed(bookIds, at) {
+      if (bookIds.length === 0) return;
+      await db.update(books).set({ lastRefreshedAt: at }).where(inArray(books.id, bookIds));
+    },
 
-  async markRefreshed(bookIds, at) {
-    if (bookIds.length === 0) return;
-    await db.update(books).set({ lastRefreshedAt: at }).where(inArray(books.id, bookIds));
-  },
+    async enqueue(userId, kind, payload) {
+      await db.insert(notificationQueue).values({ userId, kind, payload });
+    },
+  };
+}
 
-  async enqueue(userId, kind, payload) {
-    await db.insert(notificationQueue).values({ userId, kind, payload });
-  },
-};
+/** The port production uses: the real database and the real provider registry. */
+export const drizzleRefreshPort: RefreshPort = createDrizzleRefreshPort();
