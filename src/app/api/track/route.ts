@@ -1,7 +1,7 @@
 import { getCurrentUserId } from "@/lib/current-user";
 import { discoverSeriesEntries } from "@/lib/discover";
 import { persistResolvedBook } from "@/lib/persist";
-import { insertTrack } from "@/lib/tracks";
+import { insertTrack, isValidClientReleaseDate } from "@/lib/tracks";
 import type { ResolvedBook } from "@/resolution/resolve";
 
 interface TrackRequest {
@@ -21,6 +21,15 @@ export async function POST(request: Request): Promise<Response> {
   }
   if (!body.book) {
     return Response.json({ error: "book is required" }, { status: 400 });
+  }
+  // A client-supplied null on releaseDate would clear a stored date (see
+  // isValidClientReleaseDate for why that is refused outright). An absent
+  // field or a genuine date string both pass through untouched.
+  if (!isValidClientReleaseDate(body.book.releaseDate)) {
+    return Response.json(
+      { error: "releaseDate must be a date string or omitted" },
+      { status: 400 },
+    );
   }
 
   const { bookId, seriesId } = await persistResolvedBook(body.book);

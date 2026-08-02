@@ -203,6 +203,44 @@ export const REFRESH_FIXTURE_REGISTRY: MetadataProvider[] = [
 ];
 
 /**
+ * Task 18 fixture: the same book, external id, and title as
+ * REFRESH_FIXTURE_PROVIDER above, but answering WITHOUT a release date. This
+ * is the incident shape itself: a provider that answers with the book but
+ * omits the date field, which the pre-fix writer treated as `null` and wrote
+ * straight over a real stored date. releaseDate/datePrecision are left off
+ * the returned object entirely (not set to null), matching what an adapter
+ * that never learned a date actually produces.
+ */
+export const REFRESH_FIXTURE_PROVIDER_NO_DATE: MetadataProvider = {
+  name: "wikidata",
+  official: true,
+  async searchBooks() {
+    unsupported("searchBooks");
+  },
+  async getBook(externalId) {
+    if (externalId !== REFRESH_EXTERNAL_ID) return null;
+    return {
+      provider: "wikidata",
+      externalId: REFRESH_EXTERNAL_ID,
+      title: REFRESH_FIXTURE.seededTitle,
+      authors: [],
+      sourceUrl: "https://e2e.overdue.test/fixture-entity",
+    };
+  },
+  async getSeries() {
+    unsupported("getSeries");
+  },
+  async getSeriesEntries() {
+    unsupported("getSeriesEntries");
+  },
+};
+
+/** The adapter set for the Task 18 no-date-in-response incident case. */
+export const REFRESH_FIXTURE_REGISTRY_NO_DATE: MetadataProvider[] = [
+  REFRESH_FIXTURE_PROVIDER_NO_DATE,
+];
+
+/**
  * Task 17 fixture: two push subscriptions covering the health states
  * Settings must render distinctly. Endpoints are fixed and distinctive
  * (never a real browser endpoint) so `SubscriptionStore.upsert`'s unique

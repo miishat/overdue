@@ -9,6 +9,7 @@ import {
   HISTORY_FIXTURE,
   REFRESH_FIXTURE,
   REFRESH_FIXTURE_REGISTRY,
+  REFRESH_FIXTURE_REGISTRY_NO_DATE,
   seedRefreshFixture,
   seedReleaseDateHistory,
   seedSettingsFixture,
@@ -97,8 +98,10 @@ test.describe.serial("POST /api/refresh authentication", () => {
  * whether the fixture is examined: it is examined on every run, including the
  * second one after run one has stamped lastRefreshedAt on it.
  */
-function fixtureScopedPort(): RefreshPort {
-  const real = createDrizzleRefreshPort(REFRESH_FIXTURE_REGISTRY);
+function fixtureScopedPort(
+  registry: Parameters<typeof createDrizzleRefreshPort>[0] = REFRESH_FIXTURE_REGISTRY,
+): RefreshPort {
+  const real = createDrizzleRefreshPort(registry);
   return {
     ...real,
     async candidates() {
@@ -167,6 +170,51 @@ test.describe.serial("a refresh run over the fixture book", () => {
     expect(await storedReleaseDateFor(REFRESH_FIXTURE.bookId)).toBe(
       REFRESH_FIXTURE.correctedDate,
     );
+  });
+});
+
+/**
+ * Task 18 IMPORTANT finding: refresh.spec.ts had a corrected-date case above
+ * but no case for a provider OMITTING a date entirely, which is the exact
+ * Task 17 incident shape and the only end-to-end door into the real writer
+ * (persistResolvedBook via createDrizzleRefreshPort). This reuses the same
+ * fixture id and the same scoped clearSeeded as every other block in this
+ * file: REFRESH_FIXTURE_PROVIDER_NO_DATE answers for the identical
+ * (provider, externalId) pair, so persistResolvedBook's findExistingBookId
+ * still resolves to REFRESH_BOOK_ID and no candidate scope is widened.
+ */
+test.describe.serial("a refresh run whose provider omits the date entirely", () => {
+  test.beforeAll(async () => {
+    await clearSeeded();
+    await seedRefreshFixture();
+  });
+
+  test.afterAll(async () => {
+    await clearSeeded();
+  });
+
+  test("keeps the stored release date and writes no release_date change row", async () => {
+    expect(await changeLogCountFor(REFRESH_FIXTURE.bookId)).toBe(0);
+    expect(await storedReleaseDateFor(REFRESH_FIXTURE.bookId)).toBe(
+      REFRESH_FIXTURE.seededDate,
+    );
+
+    const result = await runRefresh(
+      fixtureScopedPort(REFRESH_FIXTURE_REGISTRY_NO_DATE),
+      new Date(),
+    );
+
+    expect(result.examined).toBe(1);
+    expect(result.failures).toEqual([]);
+
+    // The incident itself: the provider answered without a date, and the
+    // real writer must have carried the stored one forward rather than
+    // wiping it to null.
+    expect(await storedReleaseDateFor(REFRESH_FIXTURE.bookId)).toBe(
+      REFRESH_FIXTURE.seededDate,
+    );
+    expect(result.changed).toBe(0);
+    expect(await changeLogCountFor(REFRESH_FIXTURE.bookId, "release_date")).toBe(0);
   });
 });
 

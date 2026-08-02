@@ -269,6 +269,32 @@ export function resolveDateBelief(
   };
 }
 
+/**
+ * Builds (without executing) the pre-write read of the belief a persist is
+ * about to replace. Exported separately from `persistResolvedBook`, following
+ * the same pattern as `buildUpsertStatement` in src/lib/push/subscriptions.ts,
+ * so a test can assert on the exact statement via `.toSQL()` (which fields it
+ * filters on) without needing a database connection, rather than trusting a
+ * hand-written copy of the where clause that could drift from the real query.
+ */
+export function buildStoredReleaseSelectStatement(bookId: string) {
+  return db
+    .select({
+      date: releases.date,
+      datePrecision: releases.datePrecision,
+      confidence: releases.confidence,
+    })
+    .from(releases)
+    .where(
+      and(
+        eq(releases.bookId, bookId),
+        eq(releases.region, "US"),
+        eq(releases.format, "hardcover"),
+      ),
+    )
+    .limit(1);
+}
+
 export async function persistResolvedBook(
   book: ResolvedBook,
 ): Promise<{ bookId: string; seriesId: string | null }> {
@@ -344,23 +370,7 @@ export async function persistResolvedBook(
 
   // Read the belief this write is about to replace, so an absent date can be
   // carried forward rather than overwritten. See resolveDateBelief.
-  const storedRelease = (
-    await db
-      .select({
-        date: releases.date,
-        datePrecision: releases.datePrecision,
-        confidence: releases.confidence,
-      })
-      .from(releases)
-      .where(
-        and(
-          eq(releases.bookId, bookId),
-          eq(releases.region, "US"),
-          eq(releases.format, "hardcover"),
-        ),
-      )
-      .limit(1)
-  )[0];
+  const storedRelease = (await buildStoredReleaseSelectStatement(bookId))[0];
 
   const belief = resolveDateBelief(storedRelease ?? null, book);
 
@@ -368,6 +378,12 @@ export async function persistResolvedBook(
   // resolution that reported no date scores 40 by construction, and writing
   // that next to a date it never saw would understate a date another provider
   // did assert.
+  //
+  // This also covers a manual re-submit that carries confidence: 100 by
+  // construction (see /api/manual) but did not itself assert a date: when
+  // belief.asserted is false the write keeps storedRelease.confidence rather
+  // than stamping the manual submission's own 100 over a lower score another
+  // provider earned. See "carries the stored confidence forward" below.
   const confidence =
     belief.asserted || !storedRelease ? book.confidence : storedRelease.confidence;
 
@@ -415,6 +431,18 @@ export async function persistResolvedBook(
   // clears the prior source rows for this release and re-inserts fresh
   // ones, rather than appending duplicates that would bloat the table and
   // muddy "which providers currently claim this" on every refresh pass.
+  //
+  // CHOSEN TRADE-OFF: when belief.asserted is false (this persist preserved
+  // a stored date because nothing reported one), the re-inserted rows below
+  // still come from book.sources, i.e. what THIS resolution saw, not from
+  // whatever source originally justified the preserved date. So a preserved
+  // date can end up next to a release_sources row with a null valueSeen,
+  // and the row that actually backs the surviving date is not retained.
+  // This is accepted rather than fixed: release_sources already documents
+  // itself as current-state-not-audit-trail one paragraph up, the date
+  // itself is never lost (that is the whole point of resolveDateBelief),
+  // and change_log is where an investigator should look for "what did we
+  // last see and when", not release_sources.
   await db.delete(releaseSources).where(eq(releaseSources.releaseId, release[0].id));
 
   const sourceRows = releaseSourceRows(release[0].id, book.sources);
