@@ -835,3 +835,52 @@ function makeStatefulDbMock(
 
   return { select, insert, delete: del, update };
 }
+
+describe("resolveDateBelief", () => {
+  it("keeps the stored date when the resolution reports none", async () => {
+    // The incident: providers answered without a date and the stored date
+    // was overwritten with null.
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief({ date: "1966-01-01", datePrecision: "day" }, {}),
+    ).toEqual({ date: "1966-01-01", precision: "day", asserted: false });
+  });
+
+  it("takes an asserted date over the stored one", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief(
+        { date: "1966-01-01", datePrecision: "day" },
+        { releaseDate: "1966-05-01", datePrecision: "month" },
+      ),
+    ).toEqual({ date: "1966-05-01", precision: "month", asserted: true });
+  });
+
+  it("sets a first-ever date when nothing is stored", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief(null, { releaseDate: "2027-03-02", datePrecision: "day" }),
+    ).toEqual({ date: "2027-03-02", precision: "day", asserted: true });
+  });
+
+  it("still clears the date on an explicit withdrawal", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief({ date: "1966-01-01", datePrecision: "day" }, {
+        releaseDate: null,
+      }),
+    ).toEqual({ date: null, precision: null, asserted: true });
+  });
+
+  it("moves date and precision as one unit, never mixing the two beliefs", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    // A resolution with a precision but no date must not stamp that
+    // precision onto the date it is preserving.
+    expect(
+      resolveDateBelief(
+        { date: "1966-01-01", datePrecision: "day" },
+        { datePrecision: "year" },
+      ),
+    ).toEqual({ date: "1966-01-01", precision: "day", asserted: false });
+  });
+});

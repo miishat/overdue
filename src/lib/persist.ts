@@ -1,6 +1,6 @@
 import { and, eq, or } from "drizzle-orm";
 import { db } from "@/db/client";
-import type { ProviderName } from "@/db/schema/enums";
+import type { DatePrecision, ProviderName } from "@/db/schema/enums";
 import { authors, bookAuthors, books, series } from "@/db/schema/catalog";
 import { externalIds } from "@/db/schema/identity";
 import { releases, releaseSources } from "@/db/schema/releases";
@@ -213,6 +213,62 @@ async function upsertSeries(book: ResolvedBook): Promise<string | null> {
   return seriesId;
 }
 
+/** What we believe the release date is, and whether a source said so. */
+export interface DateBelief {
+  date: string | null;
+  precision: DatePrecision | null;
+  /**
+   * True when the resolution made a claim about the date, INCLUDING an
+   * explicit withdrawal. False means nothing was reported and the stored
+   * belief was carried forward untouched.
+   */
+  asserted: boolean;
+}
+
+/**
+ * Decides what the release date should become, given what is stored and what
+ * the resolution claims.
+ *
+ * WHY THIS EXISTS. A refresh that reached only Open Library, which answered
+ * with the book but WITHOUT a release date, wiped the real release dates of
+ * every book in the developer's library: five known-good dates replaced with
+ * null and their status collapsed to RUMORED. The old rule here was
+ * `date: book.releaseDate ?? null` on both the insert and the conflict update,
+ * i.e. an unconditional overwrite, while title, coverUrl, isbn13, description
+ * and seriesPosition on the same row were already fill-only. That asymmetry
+ * was the bug.
+ *
+ * A provider that answers but omits a field is NOT asserting the field is
+ * empty; it is simply not reporting it. So an ABSENT date (undefined) leaves
+ * the stored date exactly as it is, and only a value a source actually
+ * asserted may overwrite it.
+ *
+ * The date and its precision move as ONE unit. Keeping a stored 1966-01-01
+ * next to a precision from a resolution that never mentioned that date would
+ * mislabel the very value being preserved.
+ *
+ * An asserted null still clears the date, so an authoritative withdrawal is
+ * still representable and buildDateChangeAlert's withdrawal copy is still
+ * reachable. No adapter can produce that today (see ResolvedBook.releaseDate),
+ * which means in practice this fix converts every provider-driven withdrawal
+ * into "keep what we have" until the ProviderBook contract can distinguish the
+ * two. That is the correct direction to fail in: a stale date is visible and
+ * correctable, a silently deleted one is neither.
+ */
+export function resolveDateBelief(
+  stored: { date: string | null; datePrecision: DatePrecision | null } | null,
+  resolved: Pick<ResolvedBook, "releaseDate" | "datePrecision">,
+): DateBelief {
+  if (resolved.releaseDate === undefined && stored) {
+    return { date: stored.date, precision: stored.datePrecision, asserted: false };
+  }
+  return {
+    date: resolved.releaseDate ?? null,
+    precision: resolved.datePrecision ?? null,
+    asserted: true,
+  };
+}
+
 export async function persistResolvedBook(
   book: ResolvedBook,
 ): Promise<{ bookId: string; seriesId: string | null }> {
@@ -286,10 +342,39 @@ export async function persistResolvedBook(
       ? OFFICIAL_PROVIDERS[book.provenance.releaseDate]
       : false);
 
+  // Read the belief this write is about to replace, so an absent date can be
+  // carried forward rather than overwritten. See resolveDateBelief.
+  const storedRelease = (
+    await db
+      .select({
+        date: releases.date,
+        datePrecision: releases.datePrecision,
+        confidence: releases.confidence,
+      })
+      .from(releases)
+      .where(
+        and(
+          eq(releases.bookId, bookId),
+          eq(releases.region, "US"),
+          eq(releases.format, "hardcover"),
+        ),
+      )
+      .limit(1)
+  )[0];
+
+  const belief = resolveDateBelief(storedRelease ?? null, book);
+
+  // confidence scores belief in the DATE, so it travels with the date. A
+  // resolution that reported no date scores 40 by construction, and writing
+  // that next to a date it never saw would understate a date another provider
+  // did assert.
+  const confidence =
+    belief.asserted || !storedRelease ? book.confidence : storedRelease.confidence;
+
   const status = deriveStatus({
     now: new Date(),
-    date: book.releaseDate ? new Date(book.releaseDate) : null,
-    precision: book.datePrecision ?? null,
+    date: belief.date ? new Date(belief.date) : null,
+    precision: belief.precision,
     hasBookRecord: true,
     sourceOfficial,
     seriesStatus: null,
@@ -307,18 +392,18 @@ export async function persistResolvedBook(
       bookId,
       region: "US",
       format: "hardcover",
-      date: book.releaseDate ?? null,
-      datePrecision: book.datePrecision ?? null,
+      date: belief.date,
+      datePrecision: belief.precision,
       status,
-      confidence: book.confidence,
+      confidence,
     })
     .onConflictDoUpdate({
       target: [releases.bookId, releases.region, releases.format],
       set: {
-        date: book.releaseDate ?? null,
-        datePrecision: book.datePrecision ?? null,
+        date: belief.date,
+        datePrecision: belief.precision,
         status,
-        confidence: book.confidence,
+        confidence,
         updatedAt: new Date(),
       },
     })

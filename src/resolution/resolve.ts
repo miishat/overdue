@@ -13,7 +13,21 @@ export interface ResolvedBook {
   isbn13?: string;
   coverUrl?: string;
   description?: string;
-  releaseDate?: string;
+  /**
+   * ABSENT (undefined) and ASSERTED EMPTY (null) are different claims, and
+   * persistResolvedBook treats them differently: see resolveDateBelief in
+   * src/lib/persist.ts. undefined means no provider reported a date, which is
+   * not a statement that there is none; null means a source affirmatively
+   * withdrew the date.
+   *
+   * resolveGroup never produces null today, because hasValue() rejects null
+   * and the ProviderBook contract has no way for an adapter to say "this book
+   * has no date" as opposed to "I am not reporting one". This stays in the
+   * type so a caller that CAN assert emptiness has a channel to do it on, and
+   * so the fill-only rule below is not mistaken for "the date can never be
+   * cleared".
+   */
+  releaseDate?: string | null;
   datePrecision?: DatePrecision;
   provenance: Partial<Record<ResolvableField, ProviderName>>;
   sources: {

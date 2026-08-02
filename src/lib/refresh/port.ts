@@ -8,7 +8,7 @@ import { notificationQueue } from "@/db/schema/push";
 import { releases, releaseSources } from "@/db/schema/releases";
 import { getCurrentUserId } from "@/lib/current-user";
 import { DEFAULT_HIATUS_THRESHOLD_YEARS, mergeTrackedBookIds } from "@/lib/shelf";
-import { TRUST_RANK, persistResolvedBook } from "@/lib/persist";
+import { TRUST_RANK, persistResolvedBook, resolveDateBelief } from "@/lib/persist";
 import { providers, OFFICIAL_PROVIDERS } from "@/providers/registry";
 import type { MetadataProvider } from "@/providers/types";
 import { resolveGroup, type ResolvedBook } from "@/resolution/resolve";
@@ -183,14 +183,26 @@ async function lookupSeriesId(book: ResolvedBook): Promise<string | null> {
  *
  * Each field mirrors persistResolvedBook's own write rule, so that the diff
  * runRefresh records is the diff the later commit actually produces.
+ *
+ * Exported for src/lib/refresh/port.test.ts. The date-wipe incident was a
+ * divergence between this mirror and the writer, so the mirror is worth
+ * testing directly rather than only through a live database.
  */
-async function predictSnapshot(
+export async function predictSnapshot(
   stored: BookSnapshot,
   resolved: ResolvedBook,
   now: Date,
 ): Promise<BookSnapshot> {
-  const releaseDate = resolved.releaseDate ?? null;
-  const datePrecision = resolved.datePrecision ?? null;
+  // The same rule persistResolvedBook writes by: an absent date is not an
+  // assertion that there is none, so the stored one is carried forward. Both
+  // sides call resolveDateBelief so the mirror cannot drift from the writer
+  // and start emitting spurious correction rows in phase 5.
+  const belief = resolveDateBelief(
+    { date: stored.releaseDate, datePrecision: stored.datePrecision },
+    resolved,
+  );
+  const releaseDate = belief.date;
+  const datePrecision = belief.precision;
 
   const sourceOfficial =
     resolved.sources.some((source) => OFFICIAL_PROVIDERS[source.provider]) ||
