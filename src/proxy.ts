@@ -62,11 +62,23 @@ function denyResponse(): NextResponse {
 // display: standalone, and Add to Home Screen (and therefore iOS push)
 // would be impossible. The manifest only exposes the app name, colours,
 // and icon paths, which is less than the favicon and static assets already
-// excluded below. /sw.js stays gated: it is fetched with credentials
-// same-origin, so the cookie is sent and it registers fine for an
-// unlocked user.
+// excluded below.
+//
+// The icons the manifest points at must be excluded for the same reason,
+// and leaving them gated made the manifest exclusion useless: verified
+// against the live deployment, manifest.webmanifest returned 200 while
+// every icon it references returned 401. Install machinery fetches those
+// icons out of band, without the gate cookie, so Add to Home Screen read
+// a valid manifest and then could not load a single icon. The icon paths
+// are already public knowledge, because the manifest lists them.
+//
+// /sw.js stays gated: it is fetched with credentials same-origin, so the
+// cookie is sent and it registers fine for an unlocked user.
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest).*)",
+    // The icon rule is anchored with $ deliberately. Without it the lookahead
+    // matches on prefix, so any path merely BEGINNING with an icon name, such
+    // as /icon-192.png/anything, would be ungated too.
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon-[^/]*\\.png$).*)",
   ],
 };

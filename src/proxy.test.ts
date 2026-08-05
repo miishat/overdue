@@ -58,6 +58,29 @@ describe("proxy matcher", () => {
     ).toBe(false);
   });
 
+  // The icons the manifest references must be reachable without the gate
+  // cookie too. Excluding the manifest alone was useless: verified against
+  // the live deployment, manifest.webmanifest returned 200 while all three
+  // icons returned 401, so install read a valid manifest and then could not
+  // fetch a single icon.
+  it.each(["/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"])(
+    "does not cover %s, which the manifest references",
+    (url) => {
+      expect(unstable_doesMiddlewareMatch({ config, url })).toBe(false);
+    },
+  );
+
+  // The exclusion is scoped to the icons at the root that the manifest
+  // names. It must not become a hole any path can slip through by ending
+  // in .png, which would ungate a route whose name merely looked like one.
+  it.each([
+    "/books/icon-192.png",
+    "/api/icon-192.png",
+    "/icon-192.png/secret",
+  ])("still covers %s", (url) => {
+    expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true);
+  });
+
   // /sw.js must stay gated: it is fetched with credentials same-origin, so
   // an unlocked user's cookie is sent and it registers fine.
   it("covers /sw.js", () => {
