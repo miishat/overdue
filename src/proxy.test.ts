@@ -81,6 +81,31 @@ describe("proxy matcher", () => {
     expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true);
   });
 
+  // The scheduled job calls /api/refresh from GitHub Actions, which has no
+  // gate cookie. Gating it meant the cron got this file's 401 and never
+  // reached the route. The route carries its own stronger bearer check.
+  it("does not cover /api/refresh", () => {
+    expect(unstable_doesMiddlewareMatch({ config, url: "/api/refresh" })).toBe(
+      false,
+    );
+  });
+
+  // The exclusion is exactly one route, not the API surface. /api/search
+  // proxies a rate-limited third-party token and there is no auth in v1, so
+  // an exclusion that widened to /api would hand that token to anyone.
+  it.each([
+    "/api/search",
+    "/api/track",
+    "/api/manual",
+    "/api/read-state",
+    "/api/push/subscribe",
+    "/api/push/unsubscribe",
+    "/api/shelf/viewed",
+    "/api/refresh/extra",
+  ])("still covers %s", (url) => {
+    expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true);
+  });
+
   // /sw.js must stay gated: it is fetched with credentials same-origin, so
   // an unlocked user's cookie is sent and it registers fine.
   it("covers /sw.js", () => {

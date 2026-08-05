@@ -72,6 +72,22 @@ function denyResponse(): NextResponse {
 // a valid manifest and then could not load a single icon. The icon paths
 // are already public knowledge, because the manifest lists them.
 //
+// api/refresh is excluded because the scheduled job calls it from GitHub
+// Actions, which has no browser and therefore no gate cookie. Gating it
+// meant the cron could never reach the route at all: verified against the
+// live deployment, the workflow received this file's "Not available." 401
+// rather than anything the route produced. Nothing caught it earlier
+// because playwright.config.ts sets SITE_GATE_SECRET to "" for the server
+// it spawns, so the e2e suite exercised the route with the very protection
+// that breaks it switched off.
+//
+// Excluding it does not leave the route open. It carries stronger
+// authentication than this gate: a bearer secret compared with
+// timingSafeEqual, no hint of a near miss in any response body, and a hard
+// 503 refusal when CRON_SECRET is unset rather than defaulting to open.
+// This gate remains a shield, never identity; getCurrentUserId is still the
+// only source of identity in the app.
+//
 // /sw.js stays gated: it is fetched with credentials same-origin, so the
 // cookie is sent and it registers fine for an unlocked user.
 export const config = {
@@ -79,6 +95,6 @@ export const config = {
     // The icon rule is anchored with $ deliberately. Without it the lookahead
     // matches on prefix, so any path merely BEGINNING with an icon name, such
     // as /icon-192.png/anything, would be ungated too.
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon-[^/]*\\.png$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|icon-[^/]*\\.png$|api/refresh$).*)",
   ],
 };
