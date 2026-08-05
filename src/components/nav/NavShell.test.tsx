@@ -21,10 +21,9 @@ describe("NavShell", () => {
     expect(screen.getByText("the page")).toBeTruthy();
   });
 
-  it("lists no destination that has no page yet", () => {
+  it("lists exactly the destinations that have a page", () => {
     const hrefs = NAV_DESTINATIONS.map((d) => d.href);
-    expect(hrefs).toEqual(["/", "/library", "/search"]);
-    expect(hrefs).not.toContain("/settings");
+    expect(hrefs).toEqual(["/", "/library", "/search", "/settings"]);
   });
 
   it("marks the navigation as a landmark", () => {

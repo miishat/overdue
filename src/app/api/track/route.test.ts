@@ -6,8 +6,19 @@ const persistResolvedBook = vi.fn(async () => ({
 }));
 const insertTrack = vi.fn(async () => undefined);
 
+// tracks.ts also imports db/client, which throws without DATABASE_URL, so
+// importOriginal is not usable here the way it is for a pure module. This
+// mirrors isValidClientReleaseDate's exact body; src/lib/tracks.test.ts (see
+// isValidClientReleaseDate's own describe block) is what actually exercises
+// the real predicate's edge cases, so a drift here would show up as this
+// route accepting or rejecting something its own unit tests do not.
+function isValidClientReleaseDate(value: unknown): value is string | undefined {
+  if (value === undefined) return true;
+  return typeof value === "string" && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(value);
+}
+
 vi.mock("@/lib/persist", () => ({ persistResolvedBook }));
-vi.mock("@/lib/tracks", () => ({ insertTrack }));
+vi.mock("@/lib/tracks", () => ({ insertTrack, isValidClientReleaseDate }));
 vi.mock("@/lib/current-user", () => ({
   getCurrentUserId: vi.fn(async () => "u1"),
   LOCAL_USER_ID: "u1",
@@ -88,6 +99,37 @@ describe("POST /api/track", () => {
       seriesId: "series-1",
       bookId: null,
     });
+  });
+});
+
+describe("POST /api/track releaseDate validation", () => {
+  it("rejects a client-supplied null releaseDate instead of clearing a stored date", async () => {
+    persistResolvedBook.mockClear();
+    const res = await post({ book: { ...book, releaseDate: null }, scope: "book" });
+
+    expect(res.status).toBe(400);
+    expect(persistResolvedBook).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string, non-null releaseDate", async () => {
+    persistResolvedBook.mockClear();
+    const res = await post({ book: { ...book, releaseDate: 12345 }, scope: "book" });
+
+    expect(res.status).toBe(400);
+    expect(persistResolvedBook).not.toHaveBeenCalled();
+  });
+
+  it("accepts an omitted releaseDate", async () => {
+    const res = await post({ book, scope: "book" });
+    expect(res.status).toBe(201);
+  });
+
+  it("accepts a genuine releaseDate string", async () => {
+    const res = await post({
+      book: { ...book, releaseDate: "2027-01-15" },
+      scope: "book",
+    });
+    expect(res.status).toBe(201);
   });
 });
 

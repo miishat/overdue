@@ -21,6 +21,12 @@
 /build
 next-env.d.ts
 
+# serwist (generated service worker build artefacts)
+/public/sw.js
+/public/sw.js.map
+/public/swe-worker-*.js
+/public/swe-worker-*.js.map
+
 # misc
 .DS_Store
 *.pem

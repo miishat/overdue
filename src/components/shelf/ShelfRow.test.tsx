@@ -115,4 +115,21 @@ describe("ShelfRow", () => {
     );
     expect(screen.queryByRole("link")).toBeNull();
   });
+
+  it("renders the changed badge when the entry is marked changed", () => {
+    render(<ShelfRow entry={entry()} now={NOW} changed />);
+    expect(screen.getByText("New")).toBeTruthy();
+  });
+
+  it("renders no changed badge when the entry is not marked changed", () => {
+    render(<ShelfRow entry={entry()} now={NOW} />);
+    expect(screen.queryByText("New")).toBeNull();
+  });
+
+  it("still emits exactly four grid slots with the changed badge present, which the theme contract depends on", () => {
+    const { container } = render(<ShelfRow entry={entry()} now={NOW} changed />);
+    const slots = container.querySelectorAll("[data-slot]");
+    const names = Array.from(slots).map((s) => s.getAttribute("data-slot"));
+    expect(names).toEqual(["cover", "identity", "status", "date"]);
+  });
 });

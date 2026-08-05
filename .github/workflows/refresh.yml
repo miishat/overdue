@@ -1,0 +1,52 @@
+name: Refresh
+
+# Vercel Hobby cron is capped at once per day and fires anywhere within the
+# scheduled hour, which cannot support the instant date-change alert. GitHub
+# Actions is free and finer-grained, so the schedule lives here.
+on:
+  schedule:
+    # Every six hours. Scheduled runs on free tiers are best-effort and may be
+    # delayed or skipped; the job is idempotent and sliceable so a missed run
+    # self-heals on the next one.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger the refresh slice
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$PRODUCTION_URL" ]; then
+            echo "CRON_SECRET or PRODUCTION_URL is not set"
+            exit 1
+          fi
+          # curl's exit code is captured rather than allowed to kill the step,
+          # so the response body is always printed. Without this, the default
+          # `bash -e` aborts on a 401 or 503 before the body is read, which
+          # loses the diagnostics on exactly the run most likely to fail.
+          set +e
+          status=$(curl --silent --show-error \
+            --output response.json --write-out '%{http_code}' \
+            --request POST "$PRODUCTION_URL/api/refresh" \
+            --header "Authorization: Bearer $CRON_SECRET")
+          curl_exit=$?
+          set -e
+
+          echo "HTTP $status"
+          cat response.json || echo "(no response body)"
+          echo
+
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "curl failed with exit code $curl_exit"
+            exit 1
+          fi
+          # A 2xx is the only success. The body above explains anything else.
+          case "$status" in
+            2*) ;;
+            *) echo "Refresh returned HTTP $status"; exit 1 ;;
+          esac

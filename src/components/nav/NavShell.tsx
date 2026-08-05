@@ -1,13 +1,10 @@
 import Link from "next/link";
 
-/**
- * Settings is deliberately absent: it has no page yet, and a nav entry that
- * leads nowhere is worse than one destination fewer.
- */
 export const NAV_DESTINATIONS = [
   { href: "/", label: "Waiting" },
   { href: "/library", label: "Library" },
   { href: "/search", label: "Search" },
+  { href: "/settings", label: "Settings" },
 ] as const;
 
 export function NavShell({ children }: { children: React.ReactNode }) {

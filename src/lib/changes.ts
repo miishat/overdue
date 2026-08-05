@@ -1,4 +1,5 @@
 import type { ProviderName } from "@/db/schema/enums";
+import { RELEASE_DATE_FIELD } from "@/lib/refresh/diff";
 
 /**
  * Shape of a change_log row, matched by hand rather than inferred from the
@@ -21,13 +22,6 @@ export interface DateChange {
   provider: ProviderName;
   observedAt: Date;
 }
-
-// Nothing in this repo writes change_log yet (this task is its first
-// reader), so its string formats are unconstrained. This literal must agree
-// with whatever field name the M3 refresh job eventually writes for a
-// release-date change; if that job picks a different string, this filter
-// silently sees nothing.
-const RELEASE_DATE_FIELD = "release_date";
 
 function parseDate(value: string): Date | null {
   const parsed = new Date(value);

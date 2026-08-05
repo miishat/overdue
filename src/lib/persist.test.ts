@@ -835,3 +835,292 @@ function makeStatefulDbMock(
 
   return { select, insert, delete: del, update };
 }
+
+describe("buildStoredReleaseSelectStatement", () => {
+  it("scopes the pre-write read to the given book, US region, and hardcover format", async () => {
+    const { buildStoredReleaseSelectStatement } = await import("./persist");
+    const { sql, params } = buildStoredReleaseSelectStatement("book-scope-1").toSQL();
+
+    expect(sql).toMatch(/^select/i);
+    expect(sql).toMatch(/"book_id" = \$\d+/);
+    expect(sql).toMatch(/"region" = \$\d+/);
+    expect(sql).toMatch(/"format" = \$\d+/);
+    expect(params).toContain("book-scope-1");
+    expect(params).toContain("US");
+    expect(params).toContain("hardcover");
+  });
+});
+
+// Covers what persistResolvedBook actually WRITES into `releases`, the real
+// write path behind the Task 17 incident. resolveDateBelief above is proven
+// correct in isolation, but a stand-in test cannot catch a writer that stops
+// calling it, or that calls it and then discards the result. These tests
+// call persistResolvedBook itself and inspect the values captured by the
+// mock's onConflictDoUpdate call, so a revert of persistResolvedBook's two
+// write sites back to `book.releaseDate ?? null` / `book.datePrecision ??
+// null` makes them fail even though resolveDateBelief itself is untouched.
+describe("persistResolvedBook writes the resolved date belief", () => {
+  function makeReleaseWriteState(storedRelease: {
+    date: string | null;
+    datePrecision: string | null;
+    confidence: number;
+  } | null) {
+    return {
+      bookId: "book-fixed-1",
+      storedRelease,
+      releaseId: "release-fixed-1",
+      writtenValues: null as Record<string, unknown> | null,
+      writtenSet: null as Record<string, unknown> | null,
+      insertedSourceRows: [] as { provider: string; valueSeen: string | null }[],
+    };
+  }
+
+  function makeReleaseWriteDbMock(
+    tables: {
+      books: unknown;
+      releases: unknown;
+      series: unknown;
+      externalIds: unknown;
+      releaseSources: unknown;
+    },
+    state: ReturnType<typeof makeReleaseWriteState>,
+    hasExistingBook: boolean,
+  ) {
+    const select = () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => {
+            if (table === tables.externalIds) {
+              return hasExistingBook ? [{ entityId: state.bookId }] : [];
+            }
+            if (table === tables.books) {
+              return hasExistingBook ? [{ seriesId: null }] : [];
+            }
+            if (table === tables.releases) {
+              return state.storedRelease ? [{ ...state.storedRelease }] : [];
+            }
+            return [];
+          },
+        }),
+      }),
+    });
+
+    const insert = (table: unknown) => ({
+      values: (rows: unknown) => {
+        if (table === tables.releaseSources) {
+          state.insertedSourceRows = (
+            Array.isArray(rows) ? rows : [rows]
+          ) as typeof state.insertedSourceRows;
+        }
+        return {
+          then: (resolve: (value: undefined) => void) => resolve(undefined),
+          returning: async () => {
+            if (table === tables.books) return [{ id: state.bookId }];
+            if (table === tables.releases) return [{ id: state.releaseId }];
+            return [{ id: "row-1" }];
+          },
+          onConflictDoNothing: async () => undefined,
+          onConflictDoUpdate: (config: { set: Record<string, unknown> }) => ({
+            returning: async () => {
+              if (table === tables.releases) {
+                state.writtenValues = (
+                  Array.isArray(rows) ? rows[0] : rows
+                ) as Record<string, unknown>;
+                state.writtenSet = config.set;
+                return [{ id: state.releaseId }];
+              }
+              return [{ id: "row-1" }];
+            },
+          }),
+        };
+      },
+    });
+
+    const update = () => ({ set: () => ({ where: async () => undefined }) });
+    const del = () => ({ where: async () => undefined });
+
+    return { select, insert, update, delete: del };
+  }
+
+  async function persistWith(
+    storedRelease: { date: string | null; datePrecision: string | null; confidence: number } | null,
+    hasExistingBook: boolean,
+    book: Record<string, unknown>,
+  ) {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "RELEASED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeReleaseWriteState(storedRelease);
+    vi.doMock("@/db/client", () => ({
+      db: makeReleaseWriteDbMock(
+        { books, releases, series, externalIds, releaseSources },
+        state,
+        hasExistingBook,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+    await persistResolvedBook(book as unknown as Parameters<typeof persistResolvedBook>[0]);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+
+    return state;
+  }
+
+  it("the incident: a provider omitting a date does not wipe the stored 1966-01-01", async () => {
+    const state = await persistWith(
+      { date: "1966-01-01", datePrecision: "day", confidence: 60 },
+      true,
+      {
+        key: "isbn:incident",
+        title: "Incident Book",
+        authors: [],
+        provenance: {},
+        sources: [{ provider: "openlibrary", externalId: "ol-incident" }],
+        confidence: 40,
+        // releaseDate omitted entirely: openlibrary answered without one.
+      },
+    );
+
+    expect(state.writtenValues?.date).toBe("1966-01-01");
+    expect(state.writtenValues?.datePrecision).toBe("day");
+    expect(state.writtenSet?.date).toBe("1966-01-01");
+    expect(state.writtenSet?.datePrecision).toBe("day");
+  });
+
+  it("a provider asserting a genuinely different date still overwrites the stored one", async () => {
+    const state = await persistWith(
+      { date: "1966-01-01", datePrecision: "day", confidence: 60 },
+      true,
+      {
+        key: "isbn:corrected",
+        title: "Corrected Book",
+        authors: [],
+        provenance: {},
+        sources: [{ provider: "hardcover", externalId: "hc-corrected" }],
+        confidence: 90,
+        releaseDate: "1967-05-01",
+        datePrecision: "day",
+      },
+    );
+
+    expect(state.writtenValues?.date).toBe("1967-05-01");
+    expect(state.writtenSet?.date).toBe("1967-05-01");
+  });
+
+  it("a first-ever date still gets set when nothing was stored", async () => {
+    const state = await persistWith(null, false, {
+      key: "isbn:first-ever",
+      title: "First Ever Book",
+      authors: [],
+      provenance: {},
+      sources: [],
+      confidence: 90,
+      releaseDate: "2027-03-02",
+      datePrecision: "day",
+    });
+
+    expect(state.writtenValues?.date).toBe("2027-03-02");
+    expect(state.writtenSet?.date).toBe("2027-03-02");
+  });
+
+  it("an asserted null still clears a stored date", async () => {
+    const state = await persistWith(
+      { date: "1966-01-01", datePrecision: "day", confidence: 60 },
+      true,
+      {
+        key: "isbn:withdrawn",
+        title: "Withdrawn Book",
+        authors: [],
+        provenance: {},
+        sources: [{ provider: "manual", externalId: "manual:withdrawn" }],
+        confidence: 100,
+        releaseDate: null,
+      },
+    );
+
+    expect(state.writtenValues?.date).toBeNull();
+    expect(state.writtenValues?.datePrecision).toBeNull();
+    expect(state.writtenSet?.date).toBeNull();
+    expect(state.writtenSet?.datePrecision).toBeNull();
+  });
+
+  it("carries confidence forward alongside a preserved date rather than the resolution's own confidence", async () => {
+    const state = await persistWith(
+      { date: "1966-01-01", datePrecision: "day", confidence: 60 },
+      true,
+      {
+        key: "isbn:manual-resubmit",
+        title: "Manual Resubmit Book",
+        authors: [],
+        provenance: {},
+        sources: [{ provider: "manual", externalId: "manual:resubmit" }],
+        // Shaped like a manual re-submit: confidence: 100 by construction,
+        // but no releaseDate asserted, so the date (and its confidence) must
+        // be preserved rather than stamped with this submission's own 100.
+        confidence: 100,
+      },
+    );
+
+    expect(state.writtenValues?.date).toBe("1966-01-01");
+    expect(state.writtenValues?.confidence).toBe(60);
+    expect(state.writtenSet?.confidence).toBe(60);
+  });
+});
+
+describe("resolveDateBelief", () => {
+  it("keeps the stored date when the resolution reports none", async () => {
+    // The incident: providers answered without a date and the stored date
+    // was overwritten with null.
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief({ date: "1966-01-01", datePrecision: "day" }, {}),
+    ).toEqual({ date: "1966-01-01", precision: "day", asserted: false });
+  });
+
+  it("takes an asserted date over the stored one", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief(
+        { date: "1966-01-01", datePrecision: "day" },
+        { releaseDate: "1966-05-01", datePrecision: "month" },
+      ),
+    ).toEqual({ date: "1966-05-01", precision: "month", asserted: true });
+  });
+
+  it("sets a first-ever date when nothing is stored", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief(null, { releaseDate: "2027-03-02", datePrecision: "day" }),
+    ).toEqual({ date: "2027-03-02", precision: "day", asserted: true });
+  });
+
+  it("still clears the date on an explicit withdrawal", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    expect(
+      resolveDateBelief({ date: "1966-01-01", datePrecision: "day" }, {
+        releaseDate: null,
+      }),
+    ).toEqual({ date: null, precision: null, asserted: true });
+  });
+
+  it("moves date and precision as one unit, never mixing the two beliefs", async () => {
+    const { resolveDateBelief } = await import("./persist");
+    // A resolution with a precision but no date must not stamp that
+    // precision onto the date it is preserving.
+    expect(
+      resolveDateBelief(
+        { date: "1966-01-01", datePrecision: "day" },
+        { datePrecision: "year" },
+      ),
+    ).toEqual({ date: "1966-01-01", precision: "day", asserted: false });
+  });
+});

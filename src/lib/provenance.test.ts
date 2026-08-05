@@ -108,6 +108,20 @@ describe("formatElapsed", () => {
   it("renders months under a year", () => {
     expect(formatElapsed(new Date("2026-02-01T00:00:00Z"), NOW)).toBe("5 mo");
   });
+
+  it("renders days under a month rather than '0 mo', for sub-month callers like Settings", () => {
+    const from = new Date(NOW.getTime() - 14 * 86_400_000);
+    expect(formatElapsed(from, NOW)).toBe("14 days");
+  });
+
+  it("uses a singular day at exactly one", () => {
+    const from = new Date(NOW.getTime() - 1 * 86_400_000);
+    expect(formatElapsed(from, NOW)).toBe("1 day");
+  });
+
+  it("renders zero days as '0 days', not '0 mo'", () => {
+    expect(formatElapsed(NOW, NOW)).toBe("0 days");
+  });
 });
 
 describe("formatImprecise", () => {

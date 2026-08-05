@@ -54,9 +54,19 @@ function denyResponse(): NextResponse {
   });
 }
 
-// This matcher covers public/ assets and metadata routes on purpose: a
-// future sitemap.ts, robots.ts, or manifest.webmanifest would 401 for
-// crawlers and installers otherwise, and that is intentional, not a bug.
+// manifest.webmanifest is excluded from the gate on purpose. A
+// <link rel="manifest"> is fetched with credentials omitted unless the tag
+// carries crossorigin="use-credentials", which Next only emits on Vercel
+// preview deployments, so in production the manifest is always fetched
+// anonymously. Gating it would 401 the manifest, iOS would never see
+// display: standalone, and Add to Home Screen (and therefore iOS push)
+// would be impossible. The manifest only exposes the app name, colours,
+// and icon paths, which is less than the favicon and static assets already
+// excluded below. /sw.js stays gated: it is fetched with credentials
+// same-origin, so the cookie is sent and it registers fine for an
+// unlocked user.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest).*)",
+  ],
 };

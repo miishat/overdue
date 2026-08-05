@@ -5,7 +5,7 @@ const SEP = " · ";
 
 const MS_PER_DAY = 86_400_000;
 
-function wholeDaysBetween(from: Date, to: Date): number {
+export function wholeDaysBetween(from: Date, to: Date): number {
   return Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY);
 }
 
@@ -72,6 +72,13 @@ export function formatElapsed(from: Date, now: Date): string {
   const years = Math.floor(days / 365);
 
   if (years >= 1) return years === 1 ? "1 yr" : `${years} yrs`;
+
+  // Below 30 days, a month bucket always reads "0 mo", which looks like
+  // broken software rather than a true reading. Callers on a sub-month
+  // timescale (Settings device health) need day resolution here; callers on
+  // a year timescale (HIATUS) never pass a span this short, so this branch
+  // does not change their output.
+  if (days < 30) return days === 1 ? "1 day" : `${days} days`;
 
   const months = Math.floor(days / 30);
   return `${months} mo`;

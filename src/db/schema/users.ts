@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  lastShelfViewedAt: timestamp("last_shelf_viewed_at", { withTimezone: true }),
 });
 
 export const accounts = pgTable(

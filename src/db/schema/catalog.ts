@@ -50,6 +50,7 @@ export const books = pgTable("books", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  lastRefreshedAt: timestamp("last_refreshed_at", { withTimezone: true }),
 });
 
 export const bookAuthors = pgTable(
