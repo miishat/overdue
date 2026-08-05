@@ -25,6 +25,25 @@ jobs:
             echo "CRON_SECRET or PRODUCTION_URL is not set"
             exit 1
           fi
+
+          # A trailing slash produced "//api/refresh", which Vercel answers
+          # with a 308 to the single-slash form. curl does not follow
+          # redirects here on purpose, so the run failed on a formatting
+          # detail of the secret. Strip them rather than depending on the
+          # value being typed perfectly.
+          PRODUCTION_URL="${PRODUCTION_URL%"${PRODUCTION_URL##*[!/]}"}"
+
+          # https is required, not merely preferred. An http URL also 308s to
+          # https, but following that redirect would mean the bearer token had
+          # already crossed the network in plaintext. Refuse instead.
+          case "$PRODUCTION_URL" in
+            https://*) ;;
+            *)
+              echo "PRODUCTION_URL must start with https://"
+              echo "Refusing to send the cron secret over a non-TLS connection."
+              exit 1
+              ;;
+          esac
           # curl's exit code is captured rather than allowed to kill the step,
           # so the response body is always printed. Without this, the default
           # `bash -e` aborts on a 401 or 503 before the body is read, which
