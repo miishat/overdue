@@ -9,9 +9,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://user:pass@localhost:5432/overdue' }}
+      # No fallback on purpose. This previously defaulted to a localhost
+      # Postgres that does not exist on a runner, so a missing secret did not
+      # fail here: it produced a healthy-looking build, then every DB-reading
+      # page 500d, then Playwright's webServer waited the full 120s and
+      # reported a timeout. The real cause was three layers away from the
+      # error message. An unset value now fails in the guard below instead.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify the CI database is configured
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL is not set."
+            echo
+            echo "CI needs its own database. Set the DATABASE_URL repository"
+            echo "secret to a Neon BRANCH connection string, not production:"
+            echo "the e2e suite seeds and deletes rows on every run."
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@v4
 
