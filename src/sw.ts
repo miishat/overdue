@@ -1,8 +1,12 @@
 /// <reference lib="webworker" />
 
 import { defaultCache } from "@serwist/next/worker";
-import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import type {
+  PrecacheEntry,
+  RouteMatchCallbackOptions,
+  SerwistGlobalConfig,
+} from "serwist";
+import { ExpirationPlugin, Serwist, StaleWhileRevalidate } from "serwist";
 import { isPushPayload } from "@/lib/notify/payload";
 
 // Serwist's InjectManifest webpack plugin replaces this global with the
@@ -16,12 +20,63 @@ declare global {
 
 declare const self: ServiceWorkerGlobalScope;
 
+// Covers get their own rule, and it MUST come before defaultCache.
+//
+// Serwist matches runtimeCaching in order, first match wins. defaultCache
+// contains a rule matching every same-origin GET under /api/ with a
+// NetworkFirst capped at 16 entries (verified in
+// node_modules/@serwist/next/dist/index.worker.mjs). A library is designed
+// for 300 books, so leaving covers to that rule would evict all but the
+// last 16 and offline browsing would show a wall of broken images.
+//
+// StaleWhileRevalidate rather than CacheFirst: a cached cover is served
+// instantly and works with no network, and the background revalidation
+// picks up a genuinely changed cover on the next visit. Offline, the
+// revalidation just fails and the cached copy still rendered. CacheFirst
+// would give the same offline behaviour but freeze a cover permanently,
+// which matters because the proxy path is keyed by book id and the image
+// behind it can change when the resolver picks a different source.
+const coverCache = {
+  matcher: ({ sameOrigin, url }: RouteMatchCallbackOptions) =>
+    sameOrigin && url.pathname.startsWith("/api/covers/"),
+  method: "GET" as const,
+  handler: new StaleWhileRevalidate({
+    cacheName: "book-covers",
+    plugins: [
+      new ExpirationPlugin({
+        // Comfortably above the 300-book target the spec sets for Library,
+        // so a full library never evicts itself mid-scroll.
+        maxEntries: 400,
+        maxAgeSeconds: 60 * 60 * 24 * 90,
+        maxAgeFrom: "last-used",
+        purgeOnQuotaError: true,
+      }),
+    ],
+  }),
+};
+
 const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [coverCache, ...defaultCache],
+  // Answers a failed navigation with the precached /offline page. This only
+  // fires when a strategy could not produce a response at all, so a page the
+  // user has already visited still comes back from defaultCache's "others"
+  // NetworkFirst rather than being replaced by this.
+  //
+  // The matcher is narrowed to document requests on purpose: without it, a
+  // failed image or script fetch would be answered with a page of HTML,
+  // which is worse than a clean failure.
+  fallbacks: {
+    entries: [
+      {
+        url: "/offline",
+        matcher: ({ request }) => request.destination === "document",
+      },
+    ],
+  },
 });
 
 serwist.addEventListeners();
