@@ -35,9 +35,9 @@ describe("InstallInstructions", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("says so honestly when this browser cannot install the app", () => {
+  it("says so honestly when this browser has not offered to install the app", () => {
     render(<InstallInstructions platform="unsupported" />);
 
-    expect(screen.getByText(/does not support/i)).toBeTruthy();
+    expect(screen.getByText(/has not offered/i)).toBeTruthy();
   });
 });

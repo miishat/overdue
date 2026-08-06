@@ -34,11 +34,11 @@ describe("InstallSection", () => {
     await waitFor(() => expect(screen.getByText(/installed/i)).toBeTruthy());
   });
 
-  it("says plainly when this browser cannot install", async () => {
+  it("says plainly when this browser has not offered to install", async () => {
     platform.mockReturnValue("unsupported");
 
     render(<InstallSection />);
 
-    await waitFor(() => expect(screen.getByText(/does not support/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/has not offered/i)).toBeTruthy());
   });
 });

@@ -75,6 +75,22 @@ describe("useInstallPrompt", () => {
     await waitFor(() => expect(result.current.platform).toBe("prompt-capable"));
   });
 
+  it("reports installed once appinstalled fires, even though this tab is not standalone", async () => {
+    // This is the transition that produced the Settings bug: the tab that
+    // just finished installing is not itself the standalone window, so
+    // without the module flag this would fall through to "unsupported"
+    // rather than "installed".
+    const { useInstallPrompt } = await import("./useInstallPrompt");
+    const { result } = renderHook(() => useInstallPrompt());
+    await waitFor(() => expect(result.current.platform).toBe("unsupported"));
+
+    await act(async () => {
+      window.dispatchEvent(new Event("appinstalled"));
+    });
+
+    await waitFor(() => expect(result.current.platform).toBe("installed"));
+  });
+
   it("returns the browser's outcome from promptToInstall", async () => {
     const { useInstallPrompt } = await import("./useInstallPrompt");
     const { result } = renderHook(() => useInstallPrompt());

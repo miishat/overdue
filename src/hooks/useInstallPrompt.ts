@@ -23,6 +23,15 @@ export interface BeforeInstallPromptEvent extends Event {
  */
 let captured: BeforeInstallPromptEvent | null = null;
 let promptUsed = false;
+// Set once appinstalled fires and never cleared. The browser tab that just
+// finished the install is not itself the standalone window, so
+// readStandalone() stays false there, and with no beforeinstallprompt event
+// left to point to, detectInstallPlatform would otherwise fall all the way
+// to "unsupported" right after a successful install. This flag is OR'd into
+// the standalone input below so that case reports "installed" instead, which
+// is what makes it sticky for the rest of this page's life, same as the real
+// installed state would be on the next load.
+let installedViaEvent = false;
 const subscribers = new Set<() => void>();
 
 function notify() {
@@ -42,6 +51,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("appinstalled", () => {
     captured = null;
     promptUsed = true;
+    installedViaEvent = true;
     notify();
   });
 }
@@ -72,7 +82,7 @@ export function useInstallPrompt(): {
           userAgent: navigator.userAgent,
           platform: navigator.platform,
           maxTouchPoints: navigator.maxTouchPoints,
-          standalone: readStandalone(),
+          standalone: readStandalone() || installedViaEvent,
           hasBeforeInstallPrompt: captured !== null,
         }),
       );

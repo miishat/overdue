@@ -44,7 +44,7 @@ export function InstallInstructions({ platform }: { platform: InstallPlatform })
 
   return (
     <p className="text-[14px] text-quiet">
-      This browser does not support installing web apps. Overdue works
+      This browser has not offered to install Overdue. Overdue works
       normally in the browser; only the home screen icon and notifications
       need an install.
     </p>
