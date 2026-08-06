@@ -140,19 +140,23 @@ describe("GET /api/covers/[bookId]", () => {
 
   it("never follows an upstream redirect, which would walk past isSafeCoverUrl", async () => {
     rows.mockResolvedValue([{ coverUrl: "https://covers.openlibrary.org/b/id/1-L.jpg" }]);
-    const fetchSpy = vi.fn(async () =>
-      new Response(new Uint8Array([1, 2, 3]), {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
-      }),
-    ) as unknown as typeof fetch;
-    globalThis.fetch = fetchSpy;
+    // Typed with fetch's own parameter list rather than cast to typeof fetch,
+    // so mock.calls[0][1] is a RequestInit the assertions below can read.
+    // Casting the spy hides .mock from the compiler.
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     const res = await get();
 
     expect(res.status).toBe(200);
     const fetchOptions = fetchSpy.mock.calls[0][1];
-    expect(fetchOptions.redirect).toBe("error");
-    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions?.redirect).toBe("error");
+    expect(fetchOptions?.signal).toBeInstanceOf(AbortSignal);
   });
 });
