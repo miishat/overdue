@@ -45,6 +45,17 @@ const BOOK_HIATUS_ANCHOR_ID = "eeeeeeee-0000-4000-8000-000000000005";
  * (Harper Lee, "To Kill a Mockingbird") answers 200 directly with a real
  * JPEG (verified by hand: 332x500, no redirect), which is what actually
  * lets the render-while-offline assertion mean something.
+ *
+ * Known side effect on the dev-mode suite, accepted rather than overlooked.
+ * Serwist is disabled under `next dev`, so nothing intercepts the request:
+ * any dev spec that renders a row for "E2E Dated Book" now makes a real
+ * outbound fetch to covers.openlibrary.org through the covers route. Before
+ * this fixture, no seeded book had a cover and the dev suite reached no
+ * external host at all. It stays non-fatal: the covers route answers 502 on
+ * an unreachable upstream, the <img> simply fails to paint, and no dev spec
+ * asserts on a cover, so a sandboxed or offline runner degrades to a broken
+ * image rather than a red suite. If a dev spec ever does assert on a cover,
+ * that reasoning stops holding and this needs an interception layer.
  */
 const BOOK_DATED_COVER_URL = "https://covers.openlibrary.org/b/isbn/9780061120084-L.jpg";
 
