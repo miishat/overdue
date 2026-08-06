@@ -29,8 +29,7 @@ let promptUsed = false;
 // left to point to, detectInstallPlatform would otherwise fall all the way
 // to "unsupported" right after a successful install. This flag is OR'd into
 // the standalone input below so that case reports "installed" instead, which
-// is what makes it sticky for the rest of this page's life, same as the real
-// installed state would be on the next load.
+// is what makes it sticky for the rest of this page's life.
 let installedViaEvent = false;
 const subscribers = new Set<() => void>();
 
