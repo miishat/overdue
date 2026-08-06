@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { NavShell } from "@/components/nav/NavShell";
+import { OfflineBanner } from "@/components/offline/OfflineBanner";
 import { fontVariables } from "@/lib/fonts";
 import "./globals.css";
 
@@ -20,6 +21,7 @@ export default function RootLayout({
       className={`${fontVariables} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <OfflineBanner />
         <NavShell>{children}</NavShell>
       </body>
     </html>
