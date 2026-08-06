@@ -38,7 +38,7 @@ export default function OfflinePage() {
       </p>
       <Link
         href="/"
-        className="font-mono text-[11px] uppercase tracking-wide text-verdigris"
+        className="font-mono text-[11px] uppercase tracking-wide text-quiet"
       >
         Back to the waiting shelf
       </Link>
