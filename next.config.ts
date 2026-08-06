@@ -43,10 +43,15 @@ function resolveOfflineRevision(): string {
   }
 
   try {
-    const sha = execSync("git rev-parse HEAD").toString().trim();
+    const sha = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
     if (sha !== "") return sha.slice(0, 16);
   } catch {
-    // No git directory available, e.g. a build from a source tarball.
+    // No git directory available, e.g. a build from a source tarball. stderr
+    // is discarded above so git's "fatal: not a git repository" does not
+    // reach the build log and read like a real failure when this fallback is
+    // working exactly as intended.
   }
 
   return createHash("sha256")
