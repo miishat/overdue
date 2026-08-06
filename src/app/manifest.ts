@@ -8,6 +8,13 @@ const THEME_COLOR = PALETTE.dark.ink;
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    // A stable identity, independent of start_url. Without it the install
+    // identity is derived from start_url, so changing start_url later would
+    // register as a different app and an already-installed copy would be
+    // orphaned. Verified as a supported field in
+    // node_modules/next/dist/lib/metadata/types/manifest-types.d.ts:26.
+    id: "/",
+    scope: "/",
     name: "Overdue",
     short_name: "Overdue",
     description: "A quiet way to track the books you owe yourself.",
