@@ -25,7 +25,12 @@ export const metadata: Metadata = {
     // `export const config` there: the manifest icons had to be ungated
     // because install machinery fetches them without the gate cookie, and
     // the apple touch icon is fetched the same way.
-    apple: [{ url: "/icon-apple-180.png", sizes: "180x180", type: "image/png" }],
+    // 192x192 rather than the 180x180 iOS nominally wants. It is a copy of
+    // icon-192.png, and iOS scales it without complaint. The declared size
+    // states what the file actually is: claiming 180 for a 192 image would be
+    // a small lie in a codebase whose whole point is not making claims it
+    // cannot back.
+    apple: [{ url: "/icon-apple-192.png", sizes: "192x192", type: "image/png" }],
   },
 };
 
