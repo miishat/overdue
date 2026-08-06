@@ -143,8 +143,8 @@ describe("GET /api/covers/[bookId]", () => {
     // Typed with fetch's own parameter list rather than cast to typeof fetch,
     // so mock.calls[0][1] is a RequestInit the assertions below can read.
     // Casting the spy hides .mock from the compiler.
-    const fetchSpy = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    const fetchSpy = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
         new Response(new Uint8Array([1, 2, 3]), {
           status: 200,
           headers: { "content-type": "image/jpeg" },
