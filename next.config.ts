@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { NextConfig } from "next";
@@ -13,21 +14,48 @@ const nextConfig: NextConfig = {
 // @serwist/build/dist/index.d.mts, where GetManifestOptions declares
 // additionalPrecacheEntries?: (string | ManifestEntry)[].
 //
-// The revision is a hash of the page's own source rather than a build id or
-// a timestamp. next.config.ts can be evaluated more than once during a
-// single build, and a value that changes between evaluations would produce
-// mismatched manifests; a content hash is stable within a build and changes
-// when the page changes.
-//
-// Known limitation, accepted: this does not change when globals.css or the
-// root layout changes, so a restyled offline page can stay stale in an
-// already-installed worker until the next time this file changes. The page
-// is a static "you are offline" message shown only when the network is gone,
-// so the cost of that staleness is close to zero.
-const offlineRevision = createHash("sha256")
-  .update(readFileSync("src/app/offline/page.tsx"))
-  .digest("hex")
-  .slice(0, 16);
+// The revision must change on every deploy, not just when this file's own
+// source changes. The prerendered /offline HTML references content-hashed
+// build assets (_next/static/chunks/webpack-<hash>.js,
+// _next/static/chunks/main-app-<hash>.js, _next/static/css/<hash>.css), and
+// those hashes change on essentially every deploy because the webpack
+// runtime chunk changes whenever any chunk does. On activation, Workbox
+// deletes precache entries that are no longer in the manifest, so the old
+// chunks and CSS get evicted. If /offline keeps an identical revision, it is
+// not re-fetched, and the installed worker is left serving offline HTML
+// whose stylesheet and scripts exist neither in the precache nor on the
+// server: the offline page renders unstyled and never hydrates, on the one
+// page whose entire job is to look composed when everything else has
+// failed. So the revision is a commit SHA, not a hash of the page's own
+// source: VERCEL_GIT_COMMIT_SHA when Vercel provides one, otherwise the
+// local git HEAD. A timestamp was considered and rejected for the same
+// reason as before: next.config.ts can be evaluated more than once during a
+// single build, and Date.now() would differ between those evaluations,
+// producing mismatched manifests within one build. A commit SHA does not
+// have that problem, because it is identical across every evaluation that
+// happens against the same commit and only changes when a new commit does,
+// which is exactly the "stable within a build, different across builds"
+// behaviour this needs. The content hash remains as a last-resort fallback,
+// for a build with no git directory at all, such as one from a tarball.
+function resolveOfflineRevision(): string {
+  if (process.env.VERCEL_GIT_COMMIT_SHA) {
+    return process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 16);
+  }
+
+  try {
+    const sha = execSync("git rev-parse HEAD").toString().trim();
+    if (sha !== "") return sha.slice(0, 16);
+  } catch {
+    // No git directory available, e.g. a build from a source tarball.
+  }
+
+  return createHash("sha256")
+    .update(readFileSync("src/app/offline/page.tsx"))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+const offlineRevision = resolveOfflineRevision();
 
 const withSerwist = withSerwistInit({
   swSrc: "src/sw.ts",
