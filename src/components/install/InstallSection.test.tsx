@@ -53,4 +53,17 @@ describe("InstallSection", () => {
 
     expect(promptToInstall).toHaveBeenCalledTimes(1);
   });
+
+  it("replaces the button with fallback copy once the prompt is unavailable", async () => {
+    platform.mockReturnValue("prompt-capable");
+    promptToInstall.mockResolvedValue("unavailable");
+
+    render(<InstallSection />);
+
+    const button = await screen.findByRole("button", { name: /install/i });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText(/will not prompt again/i)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /install/i })).toBeNull();
+  });
 });
