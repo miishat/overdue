@@ -69,14 +69,20 @@ describe("ShelfRow", () => {
   });
 
   it("renders a real cover image when there is one", () => {
+    // The stored coverUrl is a provider address (e.g. openlibrary), not
+    // something we render directly; see the "ShelfRow covers" describe block
+    // below for that routing behaviour. Here bookId defaults to "b1", so the
+    // expected src is the proxy path keyed on it.
     render(
       <ShelfRow
-        entry={entry({ coverUrl: "/api/cover/abc" })}
+        entry={entry({
+          coverUrl: "https://covers.openlibrary.org/b/id/1-L.jpg",
+        })}
         now={NOW}
       />,
     );
     const img = screen.getByRole("img", { name: "The Doors of Stone" });
-    expect(img.getAttribute("src")).toBe("/api/cover/abc");
+    expect(img.getAttribute("src")).toBe("/api/covers/b1");
   });
 
   it("always renders a gap for a synthetic entry, even if a cover leaked in", () => {
@@ -131,5 +137,63 @@ describe("ShelfRow", () => {
     const slots = container.querySelectorAll("[data-slot]");
     const names = Array.from(slots).map((s) => s.getAttribute("data-slot"));
     expect(names).toEqual(["cover", "identity", "status", "date"]);
+  });
+});
+
+describe("ShelfRow covers", () => {
+  const BOOK_ID = "11111111-2222-3333-4444-555555555555";
+
+  it("renders the cover through our own origin, never the provider url", () => {
+    render(
+      <ShelfRow
+        entry={entry({
+          bookId: BOOK_ID,
+          title: "A Book",
+          coverUrl: "https://covers.openlibrary.org/b/id/1-L.jpg",
+          synthetic: false,
+        })}
+        now={NOW}
+      />,
+    );
+
+    const img = screen.getByRole("img", { name: "A Book" });
+    expect(img.getAttribute("src")).toBe(`/api/covers/${BOOK_ID}`);
+    expect(img.getAttribute("src")).not.toContain("openlibrary");
+  });
+
+  it("renders a Gap rather than a broken proxy call when the stored url is unusable", () => {
+    // container.querySelector("img"), not screen.queryByRole("img"):
+    // StatusRule (src/components/shelf/StatusRule.tsx:78) gives its status
+    // marker role="img" unconditionally, on every row, as the accessible
+    // label for a colour-only rule. An unnamed role query would match that
+    // span regardless of whether a cover rendered; querying the actual img
+    // tag is what the existing gap tests above already do.
+    const { container } = render(
+      <ShelfRow
+        entry={entry({
+          bookId: BOOK_ID,
+          coverUrl: "http://covers.openlibrary.org/b/id/1-L.jpg",
+          synthetic: false,
+        })}
+        now={NOW}
+      />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("still renders a Gap for a synthetic entry that somehow carries a cover", () => {
+    const { container } = render(
+      <ShelfRow
+        entry={entry({
+          bookId: null,
+          coverUrl: "https://covers.openlibrary.org/b/id/1-L.jpg",
+          synthetic: true,
+        })}
+        now={NOW}
+      />,
+    );
+
+    expect(container.querySelector("img")).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import { Gap } from "@/components/shelf/Gap";
 import { StatusRule } from "@/components/shelf/StatusRule";
 import { DateColumn } from "@/components/shelf/DateColumn";
 import type { ReadStateValue } from "@/db/schema/enums";
+import { coverSrcFor } from "@/lib/covers";
 import { drizzleReadStateStore, readStatesFor } from "@/lib/read-state";
 import { drizzleSeriesDetailSource, loadSeriesDetail } from "@/lib/series-detail";
 
@@ -68,6 +69,7 @@ export default async function SeriesDetailPage({
             const readState = entry.bookId
               ? readStates.get(entry.bookId)
               : undefined;
+            const coverSrc = coverSrcFor(entry);
 
             return (
               <div
@@ -79,9 +81,12 @@ export default async function SeriesDetailPage({
                 }}
               >
                 <div data-slot="cover" style={{ gridArea: "cover" }}>
-                  {entry.coverUrl ? (
+                  {coverSrc ? (
+                    // Deliberately not next/image; see the note in
+                    // src/components/shelf/ShelfRow.tsx for the reasoning.
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={entry.coverUrl}
+                      src={coverSrc}
                       alt={entry.title}
                       width={RUN_COVER_WIDTH}
                       height={RUN_COVER_WIDTH * 1.5}

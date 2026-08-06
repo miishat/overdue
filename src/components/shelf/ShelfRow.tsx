@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { coverSrcFor } from "@/lib/covers";
 import type { ShelfEntry } from "@/lib/synthesise";
 import { ChangedBadge } from "./ChangedBadge";
 import { DateColumn } from "./DateColumn";
@@ -43,7 +44,13 @@ export function ShelfRow({
   // A synthetic entry is a book that does not exist yet, so it can never have
   // a cover. Guarding on synthetic rather than only on coverUrl means a stray
   // cover on a synthesised row cannot render as though the book were real.
-  const showGap = entry.synthetic || !entry.coverUrl;
+  //
+  // coverSrcFor returns null for a synthetic entry as well (no bookId to key
+  // the proxy on) and for any stored url the proxy would refuse, so a cover
+  // that would 404 renders as the designed absence rather than a broken
+  // image icon.
+  const coverSrc = entry.synthetic ? null : coverSrcFor(entry);
+  const showGap = coverSrc === null;
 
   const href = entry.bookId
     ? `/books/${entry.bookId}`
@@ -83,8 +90,15 @@ export function ShelfRow({
         {showGap ? (
           <Gap width={COVER_WIDTH} />
         ) : (
+          // Deliberately not next/image. The cover already comes from our own
+          // origin at a fixed 2:3 box and a known width, behind a
+          // cache-control header, and the service worker caches it by this
+          // exact URL. next/image would add a second transformation layer at
+          // /_next/image?url=..., spend Vercel image-optimisation quota, and
+          // change the URL the worker caches, for no gain.
+          // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={entry.coverUrl as string}
+            src={coverSrc}
             alt={entry.title}
             width={COVER_WIDTH}
             height={COVER_WIDTH * 1.5}
