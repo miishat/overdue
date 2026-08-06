@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { detectInstallPlatform } from "@/lib/install";
 
 interface Props {
   vapidPublicKey: string | null;
@@ -39,30 +40,33 @@ function isPushSupported(): boolean {
   );
 }
 
-function isIOSDevice(): boolean {
-  const ua = navigator.userAgent;
-  const iOSDevice = /iPad|iPhone|iPod/.test(ua);
-  // iPadOS 13+ reports as a Mac, but has touch support a real Mac lacks.
-  const iPadOS13Up = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
-  return iOSDevice || iPadOS13Up;
-}
-
-function isStandalone(): boolean {
-  const nav = navigator as Navigator & { standalone?: boolean };
-  return (
-    nav.standalone === true ||
-    (typeof window.matchMedia === "function" &&
-      window.matchMedia("(display-mode: standalone)").matches)
-  );
-}
-
 async function detectStatus(): Promise<Status> {
   if (!isPushSupported()) {
     return "unsupported";
   }
-  if (isIOSDevice() && !isStandalone()) {
+
+  // One iOS heuristic in the codebase, in src/lib/install.ts. This used to be
+  // a second copy living here, and two copies of an iPadOS tell will drift:
+  // when they do, one screen offers push on a device where it cannot work
+  // while the other refuses on a device where it can.
+  const nav = navigator as Navigator & { standalone?: boolean };
+  const platform = detectInstallPlatform({
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
+    standalone:
+      nav.standalone === true ||
+      (typeof window.matchMedia === "function" &&
+        window.matchMedia("(display-mode: standalone)").matches),
+    // Irrelevant to the branch this call cares about: an iOS device is
+    // reported as "ios" whether or not a prompt event was captured.
+    hasBeforeInstallPrompt: false,
+  });
+
+  if (platform === "ios") {
     return "ios-not-installed";
   }
+
   const permission = Notification.permission;
   if (permission === "denied") {
     return "denied";
