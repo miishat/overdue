@@ -26,6 +26,9 @@ export function OfflineBanner() {
     <div
       role="status"
       aria-live="polite"
+      // Handle for the end-to-end Playwright suite (a later M4 task asserts
+      // the shelf renders offline via page.getByTestId). Keep this even
+      // though nothing in this repo's unit tests reads it yet.
       data-testid="offline-banner"
       className="border-b border-rule bg-leaf px-4 py-2 text-center font-mono text-[11px] uppercase tracking-wide text-quiet"
     >
