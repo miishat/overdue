@@ -29,6 +29,11 @@ describe("isSafeCoverUrl", () => {
     expect(isSafeCoverUrl("https://user@covers.openlibrary.org/x.jpg")).toBe(false);
   });
 
+  it("rejects a url with an explicit port, which shapes a port-scan probe", () => {
+    expect(isSafeCoverUrl("https://covers.openlibrary.org:8443/x.jpg")).toBe(false);
+    expect(isSafeCoverUrl("https://public-name.example:8443/")).toBe(false);
+  });
+
   it("rejects loopback and link-local and private names", () => {
     expect(isSafeCoverUrl("https://localhost/x.jpg")).toBe(false);
     expect(isSafeCoverUrl("https://LOCALHOST/x.jpg")).toBe(false);

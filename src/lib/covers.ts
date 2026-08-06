@@ -44,6 +44,13 @@ export function isSafeCoverUrl(value: string | null | undefined): value is strin
   // end up in a log or an error message. Nothing legitimate needs them.
   if (url.username !== "" || url.password !== "") return false;
 
+  // A non-default port turns a stored cover URL into a blind, https-only,
+  // image-content-type-gated probe of an arbitrary host and port: /api/track
+  // persists a client-supplied coverUrl unvalidated, so an anonymous caller
+  // could pick both. Refusing any explicit port removes the port-scan shape
+  // entirely; no legitimate cover CDN serves from a non-default port.
+  if (url.port !== "") return false;
+
   const hostname = url.hostname.toLowerCase();
   if (hostname === "") return false;
   if (isIpLiteral(hostname)) return false;
