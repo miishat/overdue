@@ -48,6 +48,12 @@ export function isSafeCoverUrl(value: string | null | undefined): value is strin
   if (hostname === "") return false;
   if (isIpLiteral(hostname)) return false;
 
+  // A trailing dot in WHATWG URL parsing is preserved in url.hostname, but
+  // DNS treats "localhost." identically to "localhost". Rejecting the shape
+  // outright is simpler and safer than stripping and re-checking, since no
+  // legitimate book cover CDN serves from a root-relative FQDN.
+  if (hostname.endsWith(".")) return false;
+
   for (const suffix of PRIVATE_SUFFIXES) {
     if (hostname === suffix || hostname.endsWith(`.${suffix}`)) return false;
   }

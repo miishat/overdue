@@ -52,6 +52,17 @@ describe("isSafeCoverUrl", () => {
   it("rejects a host with no dot, which cannot be a public name", () => {
     expect(isSafeCoverUrl("https://intranet/x.jpg")).toBe(false);
   });
+
+  it("rejects a hostname ending in a dot, which defeats the private-host and single-label rules", () => {
+    // A trailing dot in WHATWG URL parsing is preserved in url.hostname, but
+    // DNS treats "localhost." and "localhost" identically. This must not walk
+    // past the exact-match, suffix-match, or single-label rules.
+    expect(isSafeCoverUrl("https://localhost./x.jpg")).toBe(false);
+    expect(isSafeCoverUrl("https://db.internal./x.jpg")).toBe(false);
+    expect(isSafeCoverUrl("https://myservice.local./x.jpg")).toBe(false);
+    expect(isSafeCoverUrl("https://box.localhost./x.jpg")).toBe(false);
+    expect(isSafeCoverUrl("https://intranet./x.jpg")).toBe(false);
+  });
 });
 
 describe("coverProxyPath", () => {
