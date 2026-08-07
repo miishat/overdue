@@ -206,6 +206,124 @@ describe("persistResolvedBook dedup", () => {
   });
 });
 
+// A8: a failure between the release_sources delete and the release_sources
+// insert leaves the release with zero source rows, which silently
+// downgrades ANNOUNCED to RUMORED (drizzleShelfSource and
+// drizzleSeriesDetailSource derive sourceOfficial solely from
+// release_sources). These tests pin that the delete and insert are issued
+// together via db.batch, not as two separately awaited statements, so a
+// regression back to the old shape fails here even though every other
+// persist assertion in this file would still pass.
+describe("persistResolvedBook release_sources batching (A8)", () => {
+  it("issues the release_sources delete and insert together via db.batch, not as two separate awaits", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = {
+      bookInsertCount: 0,
+      externalIdRows: [] as { entityId: string }[],
+      releaseInsertCount: 0,
+      releaseRows: new Map<string, { id: string }>(),
+      releaseSourceCalls: [] as { releaseId: string }[],
+      batchCalls: [] as unknown[][],
+    };
+    vi.doMock("@/db/client", () => ({
+      db: makeStatefulDbMock(
+        { books, releases, series, externalIds, releaseSources },
+        state,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const book = {
+      key: "isbn:batch-together",
+      title: "Batched Book",
+      authors: [],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-batch-1" }],
+      confidence: 90,
+    };
+
+    await persistResolvedBook(book);
+
+    // Exactly one db.batch call carrying the release_sources delete and
+    // insert, not two statements awaited separately.
+    expect(state.batchCalls).toHaveLength(1);
+    const [batchedQueries] = state.batchCalls;
+    expect(batchedQueries).toHaveLength(2);
+
+    const [deleteQuery, insertQuery] = batchedQueries as {
+      __op: string;
+      __table: unknown;
+    }[];
+    expect(deleteQuery.__op).toBe("delete");
+    expect(deleteQuery.__table).toBe(releaseSources);
+    expect(insertQuery.__op).toBe("insert");
+    expect(insertQuery.__table).toBe(releaseSources);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("still batches a lone delete when there are no sources to insert, rather than skipping the batch", async () => {
+    vi.resetModules();
+
+    const { books, series } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = {
+      bookInsertCount: 0,
+      externalIdRows: [] as { entityId: string }[],
+      releaseInsertCount: 0,
+      releaseRows: new Map<string, { id: string }>(),
+      releaseSourceCalls: [] as { releaseId: string }[],
+      batchCalls: [] as unknown[][],
+    };
+    vi.doMock("@/db/client", () => ({
+      db: makeStatefulDbMock(
+        { books, releases, series, externalIds, releaseSources },
+        state,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const book = {
+      key: "isbn:batch-no-sources",
+      title: "Sourceless Book",
+      authors: [],
+      provenance: {},
+      sources: [],
+      confidence: 40,
+    };
+
+    await persistResolvedBook(book);
+
+    expect(state.batchCalls).toHaveLength(1);
+    const [batchedQueries] = state.batchCalls;
+    expect(batchedQueries).toHaveLength(1);
+    const [deleteQuery] = batchedQueries as { __op: string; __table: unknown }[];
+    expect(deleteQuery.__op).toBe("delete");
+    expect(deleteQuery.__table).toBe(releaseSources);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+});
+
 describe("persistResolvedBook series linkage", () => {
   it("persists a discovered book with a series name with a non-null seriesId", async () => {
     vi.resetModules();
@@ -513,7 +631,9 @@ function makeSingleEntityDbMock(
 
   const del = () => ({ where: async () => undefined });
 
-  return { select, insert, update, delete: del };
+  const batch = async (queries: unknown[]) => Promise.all(queries);
+
+  return { select, insert, update, delete: del, batch };
 }
 
 describe("persistResolvedBook status derivation", () => {
@@ -723,6 +843,8 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
       values: (rows: unknown) => {
         void rows;
         return {
+          __op: "insert" as const,
+          __table: table,
           then: (resolve: (value: undefined) => void) => resolve(undefined),
           returning: async () => {
             if (table === tables.books) return [{ id: "book-1" }];
@@ -741,11 +863,25 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
     };
   };
 
-  const del = () => ({ where: async () => undefined });
+  // Lazy thenable rather than an eagerly-resolving async function, so a
+  // caller (e.g. persistResolvedBook's release_sources batch) can build the
+  // statement and pass it to `batch` without it having already "run".
+  const del = (table: unknown) => ({
+    where: () => ({
+      __op: "delete" as const,
+      __table: table,
+      then: (resolve: (value: undefined) => void) => resolve(undefined),
+    }),
+  });
+
+  // Real neon-http batch sends every statement in one HTTP round trip; this
+  // mock just awaits them together via Promise.all, which is enough to
+  // exercise persistResolvedBook's call shape without a real connection.
+  const batch = async (queries: unknown[]) => Promise.all(queries);
 
   const update = () => ({ set: () => ({ where: async () => undefined }) });
 
-  return { select, insert, delete: del, update };
+  return { select, insert, delete: del, update, batch };
 }
 
 // A stateful mock that tracks how many times `books` was inserted and
@@ -765,6 +901,7 @@ function makeStatefulDbMock(
     releaseInsertCount?: number;
     releaseRows?: Map<string, { id: string }>;
     releaseSourceCalls?: { releaseId: string }[];
+    batchCalls?: unknown[][];
   },
 ) {
   const select = () => ({
@@ -791,6 +928,8 @@ function makeStatefulDbMock(
           state.releaseSourceCalls.push({ releaseId });
         }
         return {
+        __op: "insert" as const,
+        __table: table,
         then: (resolve: (value: undefined) => void) => resolve(undefined),
         returning: async () => {
           if (table === tables.books) {
@@ -834,21 +973,25 @@ function makeStatefulDbMock(
     };
   };
 
+  // Lazy thenable, tagged with __op/__table so a test can inspect exactly
+  // which statements landed inside a given db.batch([...]) call, rather
+  // than only observing that delete/insert happened at some point.
   const del = (table: unknown) => ({
-    where: async () => {
-      if (table === tables.releaseSources && state.releaseSourceCalls) {
-        // Refresh semantics: clearing prior source rows for this release
-        // before re-inserting is exercised implicitly by the insert mock
-        // above tracking calls, so no state change is needed here.
-        return undefined;
-      }
-      return undefined;
-    },
+    where: () => ({
+      __op: "delete" as const,
+      __table: table,
+      then: (resolve: (value: undefined) => void) => resolve(undefined),
+    }),
   });
+
+  const batch = async (queries: unknown[]) => {
+    state.batchCalls?.push(queries);
+    return Promise.all(queries);
+  };
 
   const update = () => ({ set: () => ({ where: async () => undefined }) });
 
-  return { select, insert, delete: del, update };
+  return { select, insert, delete: del, update, batch };
 }
 
 describe("buildStoredReleaseSelectStatement", () => {
@@ -953,8 +1096,9 @@ describe("persistResolvedBook writes the resolved date belief", () => {
 
     const update = () => ({ set: () => ({ where: async () => undefined }) });
     const del = () => ({ where: async () => undefined });
+    const batch = async (queries: unknown[]) => Promise.all(queries);
 
-    return { select, insert, update, delete: del };
+    return { select, insert, update, delete: del, batch };
   }
 
   async function persistWith(

@@ -443,11 +443,29 @@ export async function persistResolvedBook(
   // itself is never lost (that is the whole point of resolveDateBelief),
   // and change_log is where an investigator should look for "what did we
   // last see and when", not release_sources.
-  await db.delete(releaseSources).where(eq(releaseSources.releaseId, release[0].id));
+  // A failure between the delete and the insert below would leave the
+  // release with zero source rows: exactly the case the two paragraphs
+  // above assume can't happen ("the row that actually backs the surviving
+  // date is not retained" is an accepted trade-off, but a release with NO
+  // source rows at all is not that trade-off, it's data loss). neon-http
+  // has no interactive transactions (db.transaction needs a session a
+  // stateless HTTP connection doesn't have), but it does support
+  // non-interactive batched transactions via db.batch, which sends every
+  // statement in one request and commits or rolls back as a unit. So the
+  // delete and the (possibly absent) insert are issued together rather
+  // than as two separately awaited statements.
+  const deleteReleaseSources = db
+    .delete(releaseSources)
+    .where(eq(releaseSources.releaseId, release[0].id));
 
   const sourceRows = releaseSourceRows(release[0].id, book.sources);
   if (sourceRows.length > 0) {
-    await db.insert(releaseSources).values(sourceRows);
+    await db.batch([deleteReleaseSources, db.insert(releaseSources).values(sourceRows)]);
+  } else {
+    // db.batch's type requires a non-empty tuple, so this can't just pass
+    // an empty array alongside the delete. A batch of one statement is
+    // still correct and still atomic: there's nothing to insert.
+    await db.batch([deleteReleaseSources]);
   }
 
   return { bookId, seriesId };
