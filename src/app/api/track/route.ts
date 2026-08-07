@@ -1,18 +1,22 @@
+import { validateTrackBook } from "@/lib/catalog-input";
 import { getCurrentUserId } from "@/lib/current-user";
 import { discoverSeriesEntries } from "@/lib/discover";
 import { persistResolvedBook } from "@/lib/persist";
-import { insertTrack, isValidClientReleaseDate } from "@/lib/tracks";
-import type { ResolvedBook } from "@/resolution/resolve";
-
-interface TrackRequest {
-  book: ResolvedBook;
-  scope: "series" | "book";
-}
+import { insertTrack } from "@/lib/tracks";
+import { asRecord } from "@/providers/http";
 
 export async function POST(request: Request): Promise<Response> {
   const userId = await getCurrentUserId();
 
-  const body = (await request.json()) as Partial<TrackRequest>;
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    return Response.json({ error: "Malformed JSON body" }, { status: 400 });
+  }
+
+  const body = asRecord(parsed) ?? {};
+
   if (body.scope !== "series" && body.scope !== "book") {
     return Response.json(
       { error: "scope must be series or book" },
@@ -22,17 +26,20 @@ export async function POST(request: Request): Promise<Response> {
   if (!body.book) {
     return Response.json({ error: "book is required" }, { status: 400 });
   }
-  // A client-supplied null on releaseDate would clear a stored date (see
-  // isValidClientReleaseDate for why that is refused outright). An absent
-  // field or a genuine date string both pass through untouched.
-  if (!isValidClientReleaseDate(body.book.releaseDate)) {
-    return Response.json(
-      { error: "releaseDate must be a date string or omitted" },
-      { status: 400 },
-    );
-  }
 
-  const { bookId, seriesId } = await persistResolvedBook(body.book);
+  // validateTrackBook is a narrowing guard rather than a cast (see the
+  // comment on isReadStateValue in src/lib/read-state.ts for why a guard
+  // beats a cast here): it rejects a request whose book does not match
+  // ResolvedBook's shape instead of trusting `as Partial<TrackRequest>` to
+  // make it so. It also covers releaseDate, so a separate check for a
+  // client-supplied null is no longer needed here.
+  const validation = validateTrackBook(body.book);
+  if (!validation.ok) {
+    return Response.json({ error: validation.error }, { status: 400 });
+  }
+  const book = validation.book;
+
+  const { bookId, seriesId } = await persistResolvedBook(book);
 
   if (body.scope === "series" && !seriesId) {
     return Response.json(
@@ -51,14 +58,14 @@ export async function POST(request: Request): Promise<Response> {
   // discovery must not fail the request, it should just leave the rest of
   // the series to be filled in by a later refresh.
   if (body.scope === "series") {
-    const refs = body.book.sources
+    const refs = book.sources
       .filter((s) => s.provider === "hardcover" || s.provider === "wikidata")
       .map((s) => ({ provider: s.provider, externalId: s.externalId }));
 
     try {
       const entries = await discoverSeriesEntries(refs);
       for (const entry of entries) {
-        if (entry.key === body.book.key) continue;
+        if (entry.key === book.key) continue;
         await persistResolvedBook(entry);
       }
     } catch (error) {

@@ -26,6 +26,16 @@ async function post(body: unknown) {
   );
 }
 
+async function postRaw(rawBody: string) {
+  const { POST } = await import("./route");
+  return POST(
+    new Request("http://localhost/api/manual", {
+      method: "POST",
+      body: rawBody,
+    }),
+  );
+}
+
 describe("POST /api/manual", () => {
   it("rejects a missing title", async () => {
     const res = await post({ author: "Someone" });
@@ -34,6 +44,26 @@ describe("POST /api/manual", () => {
 
   it("rejects a whitespace-only title", async () => {
     const res = await post({ title: "   " });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400, not 500, for a body that is not valid JSON", async () => {
+    const res = await postRaw("{not json");
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400, not a 500 TypeError, for a non-string title", async () => {
+    const res = await post({ title: 12345 });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a title over the length bound", async () => {
+    const res = await post({ title: "x".repeat(1000) });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects notes over the length bound", async () => {
+    const res = await post({ title: "T", notes: "x".repeat(10000) });
     expect(res.status).toBe(400);
   });
 

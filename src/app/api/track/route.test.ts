@@ -48,6 +48,16 @@ async function post(body: unknown) {
   );
 }
 
+async function postRaw(rawBody: string) {
+  const { POST } = await import("./route");
+  return POST(
+    new Request("http://localhost/api/track", {
+      method: "POST",
+      body: rawBody,
+    }),
+  );
+}
+
 describe("POST /api/track", () => {
   it("tracks the series when scope is series", async () => {
     const res = await post({ book, scope: "series" });
@@ -130,6 +140,69 @@ describe("POST /api/track releaseDate validation", () => {
       scope: "book",
     });
     expect(res.status).toBe(201);
+  });
+});
+
+describe("POST /api/track malformed body (E1)", () => {
+  it("returns 400, not 500, for a body that is not valid JSON", async () => {
+    const res = await postRaw("{not json");
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/track book validation (E1)", () => {
+  it("rejects an unknown provider in sources rather than hitting the database", async () => {
+    persistResolvedBook.mockClear();
+    const res = await post({
+      book: { ...book, sources: [{ provider: "bookshop", externalId: "1" }] },
+      scope: "book",
+    });
+
+    expect(res.status).toBe(400);
+    expect(persistResolvedBook).not.toHaveBeenCalled();
+  });
+
+  it("rejects a coverUrl this app is not willing to render", async () => {
+    persistResolvedBook.mockClear();
+    const res = await post({
+      book: { ...book, coverUrl: "http://example.com/cover.jpg" },
+      scope: "book",
+    });
+
+    expect(res.status).toBe(400);
+    expect(persistResolvedBook).not.toHaveBeenCalled();
+  });
+
+  it("accepts a safe https coverUrl", async () => {
+    const res = await post({
+      book: { ...book, coverUrl: "https://covers.example.com/cover.jpg" },
+      scope: "book",
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects a title over the length bound", async () => {
+    persistResolvedBook.mockClear();
+    const res = await post({
+      book: { ...book, title: "x".repeat(1000) },
+      scope: "book",
+    });
+
+    expect(res.status).toBe(400);
+    expect(persistResolvedBook).not.toHaveBeenCalled();
+  });
+
+  it("does not echo the offending value back in the error body", async () => {
+    const secretLookingValue = "sk-super-secret-value-should-not-appear";
+    const res = await post({
+      book: { ...book, title: secretLookingValue.repeat(50) },
+      scope: "book",
+    });
+
+    expect(res.status).toBe(400);
+    const responseText = await res.text();
+    expect(responseText).not.toContain(secretLookingValue);
   });
 });
 
