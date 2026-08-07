@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SeenStore } from "@/lib/seen";
 
 // db/client.ts throws if DATABASE_URL is unset. neon() only builds a lazy
 // query function at construction time and does not connect, so a placeholder
@@ -6,8 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 // touching a real database.
 process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
 
-const markViewed = vi.fn(async () => undefined);
-const lastViewedAt = vi.fn(async () => null as Date | null);
+const markViewed = vi.fn<SeenStore["markViewed"]>(async () => undefined);
+const lastViewedAt = vi.fn<SeenStore["lastViewedAt"]>(async () => null);
 
 vi.mock("@/lib/seen", async () => {
   const actual = await vi.importActual<typeof import("@/lib/seen")>(
@@ -43,7 +44,7 @@ describe("POST /api/shelf/viewed", () => {
 
     expect(res.status).toBe(200);
     expect(markViewed).toHaveBeenCalledTimes(1);
-    const [, at] = markViewed.mock.calls[0] as [string, Date];
+    const [, at] = markViewed.mock.calls[0];
     expect(at.toISOString()).toBe(viewedAt);
   });
 
@@ -54,7 +55,7 @@ describe("POST /api/shelf/viewed", () => {
     await post({ viewedAt: "2026-07-29T00:00:00.000Z", userId: "attacker" });
 
     expect(markViewed).toHaveBeenCalledTimes(1);
-    const [userId] = markViewed.mock.calls[0] as [string, Date];
+    const [userId] = markViewed.mock.calls[0];
     expect(userId).toBe("u1");
   });
 
@@ -101,7 +102,7 @@ describe("POST /api/shelf/viewed", () => {
 
     expect(res.status).toBe(200);
     expect(markViewed).toHaveBeenCalledTimes(1);
-    const [, at] = markViewed.mock.calls[0] as [string, Date];
+    const [, at] = markViewed.mock.calls[0];
     expect(at.getTime()).toBeGreaterThanOrEqual(before);
     expect(at.getTime()).toBeLessThanOrEqual(after);
   });
@@ -115,7 +116,7 @@ describe("POST /api/shelf/viewed", () => {
 
     expect(res.status).toBe(200);
     expect(markViewed).toHaveBeenCalledTimes(1);
-    const [, at] = markViewed.mock.calls[0] as [string, Date];
+    const [, at] = markViewed.mock.calls[0];
     expect(at.toISOString()).toBe(baseline.toISOString());
   });
 });

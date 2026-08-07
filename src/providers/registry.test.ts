@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MetadataProvider, ProviderBook } from "./types";
+import type { ProviderName } from "@/db/schema/enums";
 import {
   searchAcross,
   getSeriesEntriesFromProviders,
@@ -158,7 +159,13 @@ describe("getSeriesEntriesFromProviders", () => {
       [googleProvider],
       [
         { provider: "google", externalId: "series-1" },
-        { provider: "unknown", externalId: "series-2" },
+        // ProviderName is a closed union at compile time, but a series ref
+        // this stale (naming a provider that has since been retired from
+        // `providers`) is exactly what this test exercises: registry lookup
+        // must degrade to "no entries" rather than throw. Cast, not `any`,
+        // to put a value outside the union through the same code path a
+        // real stale row would take.
+        { provider: "unknown" as ProviderName, externalId: "series-2" },
       ],
     );
 

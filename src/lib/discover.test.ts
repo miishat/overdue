@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderBook } from "@/providers/types";
+import type { SeriesRef } from "@/providers/registry";
 
-const getSeriesEntriesFromAll = vi.fn<[], Promise<ProviderBook[]>>();
+const getSeriesEntriesFromAll = vi.fn<
+  (refs: SeriesRef[], signal?: AbortSignal) => Promise<ProviderBook[]>
+>();
 vi.mock("@/providers/registry", () => ({ getSeriesEntriesFromAll }));
 
 describe("discoverSeriesEntries", () => {
@@ -30,6 +33,13 @@ describe("discoverSeriesEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0].seriesPosition).toBe(6);
+    // Pins the argument, not just the return. The mock used to be typed as
+    // taking no arguments at all while the real function requires refs, which
+    // is the drift the typecheck gate exists to catch. A typed mock nobody
+    // asserts against still lets a caller stop passing refs unnoticed.
+    expect(getSeriesEntriesFromAll).toHaveBeenCalledWith([
+      { provider: "hardcover", externalId: "77" },
+    ]);
   });
 
   it("orders entries by series position", async () => {

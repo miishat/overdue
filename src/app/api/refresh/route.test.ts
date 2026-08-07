@@ -36,7 +36,7 @@ const callOrder: string[] = [];
 
 const drainQueue = vi.fn(async () => ({ claimed: 0, sent: 0, failed: 0 }));
 vi.mock("@/lib/notify/drain", () => ({
-  drainQueue: (...args: unknown[]) => drainQueue(...args),
+  drainQueue,
 }));
 
 vi.mock("@/lib/notify/queue", () => ({
@@ -45,7 +45,7 @@ vi.mock("@/lib/notify/queue", () => ({
 
 const listFor = vi.fn(async () => []);
 vi.mock("@/lib/push/subscriptions", () => ({
-  drizzleSubscriptionStore: { listFor: (...args: unknown[]) => listFor(...args) },
+  drizzleSubscriptionStore: { listFor },
 }));
 
 // A fake transport, truthy, so runDrain proceeds to call drainQueue instead
@@ -53,7 +53,7 @@ vi.mock("@/lib/push/subscriptions", () => ({
 // returns null without VAPID env vars, which every test here leaves unset).
 const createWebPushTransport = vi.fn(() => ({ send: vi.fn() }));
 vi.mock("@/lib/notify/send", () => ({
-  createWebPushTransport: (...args: unknown[]) => createWebPushTransport(...args),
+  createWebPushTransport,
 }));
 
 const SECRET = "test-cron-secret-value";
