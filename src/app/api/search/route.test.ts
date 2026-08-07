@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderBook } from "@/providers/types";
 
-const searchAllProviders = vi.fn<[], Promise<ProviderBook[]>>();
+const searchAllProviders = vi.fn<
+  (query: string, signal?: AbortSignal) => Promise<ProviderBook[]>
+>();
 vi.mock("@/providers/registry", () => ({ searchAllProviders }));
 
 async function callRoute(url: string) {

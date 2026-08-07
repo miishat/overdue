@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderBook } from "@/providers/types";
+import type { SeriesRef } from "@/providers/registry";
 
-const getSeriesEntriesFromAll = vi.fn<[], Promise<ProviderBook[]>>();
+const getSeriesEntriesFromAll = vi.fn<
+  (refs: SeriesRef[], signal?: AbortSignal) => Promise<ProviderBook[]>
+>();
 vi.mock("@/providers/registry", () => ({ getSeriesEntriesFromAll }));
 
 describe("discoverSeriesEntries", () => {
