@@ -139,9 +139,18 @@ async function searchEntities(text: string, signal?: AbortSignal): Promise<Searc
 }
 
 // Exported for a direct unit test; also used to build the VALUES clause in
-// enrichmentQuery below.
+// enrichmentQuery below. The isValidQid filter makes the injection
+// invariant local to the function that actually interpolates into SPARQL,
+// rather than relying solely on the guard one function away in
+// candidatesFromSearchResponse: this function is exported and directly unit
+// tested, so a future second caller that forgot that upstream filter would
+// otherwise reopen the hole silently. The guard at the parse boundary stays
+// too; defense in depth is the point.
 export function buildValuesClause(qids: string[]): string {
-  return qids.map((qid) => `wd:${qid}`).join(" ");
+  return qids
+    .filter(isValidQid)
+    .map((qid) => `wd:${qid}`)
+    .join(" ");
 }
 
 // Enriches an already-narrowed set of candidate QIDs with series membership

