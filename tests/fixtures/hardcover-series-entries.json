@@ -22,6 +22,15 @@
               "release_date": null,
               "contributions": [{ "author": { "name": "Brandon Sanderson" } }]
             }
+          },
+          {
+            "position": 7,
+            "book": {
+              "id": 88888,
+              "title": "Stormlight Archive, Book Seven",
+              "release_date": "2027-01-01",
+              "contributions": [{ "author": { "name": "Brandon Sanderson" } }]
+            }
           }
         ]
       }

@@ -38,6 +38,32 @@
               "slug": "the-way-of-kings"
             },
             "text_match": 578730123365187601
+          },
+          {
+            "document": {
+              "id": "67890",
+              "title": "Stormlight Archive, Book Seven",
+              "description": "Placeholder year, no confirmed date.",
+              "release_date": "2027-01-01",
+              "release_year": 2027,
+              "author_names": ["Brandon Sanderson"],
+              "image": { "url": "https://hardcover.app/cover7.jpg" },
+              "featured_series": {
+                "featured": true,
+                "position": 7.0,
+                "series": {
+                  "id": 77,
+                  "name": "The Stormlight Archive",
+                  "books_count": 10,
+                  "primary_books_count": 10,
+                  "slug": "the-stormlight-archive"
+                }
+              },
+              "series_ids": [77],
+              "series_names": ["The Stormlight Archive"],
+              "slug": "stormlight-archive-book-seven"
+            },
+            "text_match": 578730123365187600
           }
         ]
       }
