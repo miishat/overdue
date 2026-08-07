@@ -5,15 +5,13 @@ import {
   type ProviderName,
 } from "@/db/schema/enums";
 import { isSafeCoverUrl } from "@/lib/covers";
-import { isValidClientReleaseDate } from "@/lib/tracks";
 import { asRecord } from "@/providers/http";
 import type { ResolvedBook } from "@/resolution/resolve";
 
 /**
  * Narrowing guards for the untrusted body of POST /api/track, following the
- * same pattern as isReadStateValue (src/lib/read-state.ts) and
- * isValidClientReleaseDate (src/lib/tracks.ts): a guard that rejects,
- * rather than a cast that trusts. `as Partial<TrackRequest>` let an
+ * same pattern as isReadStateValue (src/lib/read-state.ts): a guard that
+ * rejects, rather than a cast that trusts. `as Partial<TrackRequest>` let an
  * anonymous request write title, coverUrl, description, seriesName,
  * confidence, releaseDate, datePrecision, and arbitrary (provider,
  * externalId) pairs into shared catalog tables with no checks at all. An
@@ -26,6 +24,16 @@ import type { ResolvedBook } from "@/resolution/resolve";
  * into a table every user's shelf reads from. Nothing here truncates or
  * coerces: a value outside a bound is rejected outright, so a caller that
  * sent something wrong learns that instead of having it silently reshaped.
+ *
+ * This module imports no database client and never will: every guard below
+ * is a pure predicate over an `unknown` value. isValidClientReleaseDate used
+ * to live in src/lib/tracks.ts, which imports @/db/client (throws without
+ * DATABASE_URL), so importing it dragged a database dependency into a module
+ * that otherwise has none, forcing src/lib/catalog-input.test.ts into a
+ * DATABASE_URL placeholder and a beforeAll dynamic import purely to dodge
+ * module evaluation order. It now lives here, alongside this module's other
+ * pure guards (isProviderName, isDatePrecisionValue), which is its natural
+ * home: it guards the same untrusted request body they do.
  */
 
 // A few hundred characters covers the longest real titles, including
@@ -70,7 +78,32 @@ export const MAX_SOURCES = 20;
 // sourceUrl is never fetched server-side, only stored and displayed, but
 // it is still free text and gets the same "bounded, not unbounded" rule
 // as everything else in this module.
+//
+// This is now the one bound for every sourceUrl in this module. It used to
+// differ by call site: book.sources[].sourceUrl was bound by
+// MAX_TEXT_FIELD_LENGTH (5000) while /api/manual's sourceUrl was bound by
+// this constant (2000), two different limits on what is conceptually the
+// same field. Unified on the tighter of the two.
 export const MAX_SOURCE_URL_LENGTH = 2000;
+
+// book.key never reaches the database (persist.ts never writes it to a
+// column; it exists only for in-process comparisons, e.g. route.ts's
+// `entry.key === book.key` when filtering discovered series entries). It
+// was the one string field in this module with no length bound at all.
+// Impact is nil since nothing downstream persists it, but this module's own
+// rule is bounded, not unbounded, for every field, not just the ones that
+// reach a column. Generous enough to hold /api/manual's derived key (title
+// plus author; see stableExternalId in src/app/api/manual/route.ts) with
+// headroom to spare.
+export const MAX_KEY_LENGTH = 1000;
+
+// series_position is numeric(6, 2) in src/db/schema/catalog.ts: 6 total
+// digits, 2 after the decimal point, so the largest magnitude it can store
+// is 9999.99. A seriesPosition at or past 10000 in magnitude used to pass
+// this validator, reach persist.ts's `.toString()`, and raise a Postgres
+// "numeric field overflow" with no try/catch anywhere on the route to turn
+// it into a 400 (the exact failure the audit's E1 finding named).
+export const MAX_SERIES_POSITION_MAGNITUDE = 10000;
 
 /**
  * Narrowing guard rather than a cast, so an unknown value from a request
@@ -87,6 +120,74 @@ export function isProviderName(value: unknown): value is ProviderName {
  */
 export function isDatePrecisionValue(value: unknown): value is DatePrecision {
   return typeof value === "string" && (DATE_PRECISIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Narrowing guard rather than a cast, so an untrusted /api/track request
+ * body cannot reach persistResolvedBook with a releaseDate shaped in a way
+ * ResolvedBook was never meant to carry from outside the resolver.
+ *
+ * ResolvedBook.releaseDate accepts null to mean an authoritative withdrawal
+ * (see the comment on that field in src/resolution/resolve.ts), a channel
+ * added for a source that can genuinely assert "no date". No provider
+ * adapter can produce that value today, and an untrusted HTTP client is not
+ * a provider either: a caller of this route who wants to correct a date can
+ * always submit the corrected string, and there is no legitimate reason for
+ * an anonymous request body to clear a date the app already has for a book.
+ * So this predicate accepts only a present, non-empty date string or an
+ * absent field, and rejects a client-supplied null outright rather than
+ * letting it through as a withdrawal.
+ *
+ * CHOSEN (item 2 of the review): require a full YYYY-MM-DD and reject a
+ * partial date ("2027" or "2027-01") rather than normalise it to one.
+ * persist.ts writes this value straight into releases.date, a Postgres
+ * `date` column that has no partial form; "2027" and "2027-01" are not
+ * valid `date` literals and used to reach the column unrejected, raising
+ * the same class of 500 this module exists to close off. Normalising a
+ * partial to a full date (e.g. treating "2027" as "2027-01-01") was
+ * rejected as the fix: this project already found and fixed exactly that
+ * defect in the Hardcover adapter (see precisionForHardcoverDate in
+ * src/providers/hardcover.ts), where a bare placeholder year arrived as a
+ * January 1 date and rendered as a confirmed release nobody confirmed. A
+ * partial date is a precision claim, and date_precision is the field this
+ * app built to carry that claim; releaseDate itself only ever carries a
+ * full day. A client that means "sometime in 2027" has no way to say so
+ * through this field today, and must omit it (optionally pairing a
+ * datePrecision on its own) rather than have this guard invent a day for
+ * it. No caller in this codebase depends on the partial forms: every
+ * provider adapter (google-books.ts, hardcover.ts, wikidata.ts) already
+ * normalises its own releaseDate to a full YYYY-MM-DD before it reaches
+ * ResolvedBook, so this only tightens what an anonymous request body may
+ * assert, not what a real resolution ever produces.
+ */
+export function isValidClientReleaseDate(value: unknown): value is string | undefined {
+  if (value === undefined) return true;
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/**
+ * A URL-shaped guard for sourceUrl, the one URL field this app stores but
+ * never fetches server-side and does not yet render as an <a href> (see
+ * src/lib/book-detail.ts, which already selects it into the detail model).
+ * Deliberately not isSafeCoverUrl (src/lib/covers.ts) reused: that guard
+ * also forbids a non-default port, a rule that exists specifically because
+ * a stored cover URL becomes a blind, server-side fetch through the cover
+ * proxy, which turns a non-default port into a port-scan primitive. A
+ * sourceUrl is never fetched by this server, only stored and eventually
+ * clicked as a link, so a publisher's site running on a non-default port is
+ * a legitimate sourceUrl that isSafeCoverUrl's port rule would wrongly
+ * reject. What both guards share, and what this one exists to enforce, is
+ * refusing a scheme other than http(s), so a stored value can never become
+ * a javascript: payload waiting for the first component that renders it.
+ */
+export function isSafeSourceUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" || url.protocol === "https:";
 }
 
 export type TrackBookValidation =
@@ -119,6 +220,9 @@ export function validateTrackBook(value: unknown): TrackBookValidation {
   const key = record.key;
   if (typeof key !== "string" || key.trim().length === 0) {
     return fail("book.key is required and must be a non-empty string");
+  }
+  if (key.length > MAX_KEY_LENGTH) {
+    return fail(`book.key must be at most ${MAX_KEY_LENGTH} characters`);
   }
 
   const authorsRaw = record.authors;
@@ -164,6 +268,13 @@ export function validateTrackBook(value: unknown): TrackBookValidation {
     if (typeof seriesPositionRaw !== "number" || !Number.isFinite(seriesPositionRaw)) {
       return fail("book.seriesPosition must be a finite number");
     }
+    // Mirrors the series_position column's numeric(6, 2) bound. See
+    // MAX_SERIES_POSITION_MAGNITUDE above for why this specific value.
+    if (Math.abs(seriesPositionRaw) >= MAX_SERIES_POSITION_MAGNITUDE) {
+      return fail(
+        `book.seriesPosition magnitude must be less than ${MAX_SERIES_POSITION_MAGNITUDE}`,
+      );
+    }
   }
   const seriesPosition = seriesPositionRaw as number | undefined;
 
@@ -197,8 +308,8 @@ export function validateTrackBook(value: unknown): TrackBookValidation {
   const description = descriptionRaw as string | undefined;
 
   // A client-supplied null would clear a stored date; isValidClientReleaseDate
-  // (src/lib/tracks.ts) documents why that channel is refused outright for
-  // an anonymous request. Reused here instead of duplicating the rule.
+  // above documents why that channel is refused outright for an anonymous
+  // request, and why a partial date is rejected rather than normalised.
   if (!isValidClientReleaseDate(record.releaseDate)) {
     return fail("book.releaseDate must be a date string or omitted");
   }
@@ -258,8 +369,16 @@ export function validateTrackBook(value: unknown): TrackBookValidation {
     }
 
     if (entry.sourceUrl !== undefined) {
-      if (typeof entry.sourceUrl !== "string" || entry.sourceUrl.length > MAX_TEXT_FIELD_LENGTH) {
-        return fail(`each book.sources sourceUrl must be a string of at most ${MAX_TEXT_FIELD_LENGTH} characters`);
+      if (typeof entry.sourceUrl !== "string" || entry.sourceUrl.length > MAX_SOURCE_URL_LENGTH) {
+        return fail(`each book.sources sourceUrl must be a string of at most ${MAX_SOURCE_URL_LENGTH} characters`);
+      }
+      // isSafeSourceUrl (see above) refuses a scheme other than http(s), so
+      // a javascript: value can never be stored waiting for a future
+      // renderer. An empty string is left alone here: it carries no scheme
+      // to police and is already accepted as "no url" elsewhere in this
+      // module (see validateManualInput's sourceUrl handling below).
+      if (entry.sourceUrl.length > 0 && !isSafeSourceUrl(entry.sourceUrl)) {
+        return fail("each book.sources sourceUrl must be an http or https URL");
       }
     }
 
@@ -368,6 +487,12 @@ export function validateManualInput(value: unknown): ManualInputValidation {
       return fail(`sourceUrl must be at most ${MAX_SOURCE_URL_LENGTH} characters`);
     }
     const trimmed = record.sourceUrl.trim();
+    // See isSafeSourceUrl above for why this is not isSafeCoverUrl. A
+    // whitespace-only sourceUrl is treated as "no url" (unchanged from
+    // before), so the scheme check only runs once something is left.
+    if (trimmed.length > 0 && !isSafeSourceUrl(trimmed)) {
+      return fail("sourceUrl must be an http or https URL");
+    }
     sourceUrl = trimmed.length > 0 ? trimmed : undefined;
   }
 

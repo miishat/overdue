@@ -6,19 +6,14 @@ const persistResolvedBook = vi.fn(async () => ({
 }));
 const insertTrack = vi.fn(async () => undefined);
 
-// tracks.ts also imports db/client, which throws without DATABASE_URL, so
-// importOriginal is not usable here the way it is for a pure module. This
-// mirrors isValidClientReleaseDate's exact body; src/lib/tracks.test.ts (see
-// isValidClientReleaseDate's own describe block) is what actually exercises
-// the real predicate's edge cases, so a drift here would show up as this
-// route accepting or rejecting something its own unit tests do not.
-function isValidClientReleaseDate(value: unknown): value is string | undefined {
-  if (value === undefined) return true;
-  return typeof value === "string" && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(value);
-}
-
+// tracks.ts imports db/client, which throws without DATABASE_URL, so
+// importOriginal is not usable here the way it is for a pure module. Only
+// insertTrack needs mocking: isValidClientReleaseDate now lives in
+// src/lib/catalog-input.ts, a pure module this route imports directly and
+// unmocked, so this test exercises the real predicate rather than a
+// hand-copied reimplementation that could drift from it.
 vi.mock("@/lib/persist", () => ({ persistResolvedBook }));
-vi.mock("@/lib/tracks", () => ({ insertTrack, isValidClientReleaseDate }));
+vi.mock("@/lib/tracks", () => ({ insertTrack }));
 vi.mock("@/lib/current-user", () => ({
   getCurrentUserId: vi.fn(async () => "u1"),
   LOCAL_USER_ID: "u1",

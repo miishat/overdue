@@ -1,19 +1,12 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import * as catalogInput from "./catalog-input";
 
-// db/client.ts throws if DATABASE_URL is unset, and it is reached
-// transitively through tracks.ts (isValidClientReleaseDate), which
-// catalog-input.ts imports. A static top-level import of catalog-input.ts
-// here would be hoisted ahead of this assignment by ES module evaluation
-// order, so the module is instead loaded dynamically in beforeAll, once
-// this placeholder is guaranteed to already be set. Mirrors the same
-// workaround in src/lib/tracks.test.ts.
-process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
-
-let catalogInput: typeof import("./catalog-input");
-
-beforeAll(async () => {
-  catalogInput = await import("./catalog-input");
-});
+// catalog-input.ts imports no database client (see the module comment at
+// the top of catalog-input.ts): every guard here, including
+// isValidClientReleaseDate, is a pure predicate. A static top-level import
+// is enough; no DATABASE_URL placeholder or beforeAll dynamic-import dance
+// is needed to dodge module evaluation order the way src/lib/tracks.test.ts
+// once had to.
 
 function baseBook(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -103,6 +96,19 @@ describe("validateTrackBook", () => {
     expect(catalogInput.validateTrackBook(baseBook({ key: "" })).ok).toBe(false);
   });
 
+  // book.key never reaches the database (see persist.ts), but this module's
+  // stated rule is bounded, not unbounded, for every string field, whether
+  // or not it is ever persisted.
+  it("rejects a key longer than the maximum", () => {
+    const book = baseBook({ key: "x".repeat(catalogInput.MAX_KEY_LENGTH + 1) });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+  });
+
+  it("accepts a key at exactly the maximum length", () => {
+    const book = baseBook({ key: "x".repeat(catalogInput.MAX_KEY_LENGTH) });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(true);
+  });
+
   it("rejects authors that is not an array", () => {
     expect(catalogInput.validateTrackBook(baseBook({ authors: "R. F. Kuang" })).ok).toBe(
       false,
@@ -180,6 +186,53 @@ describe("validateTrackBook", () => {
     expect(catalogInput.validateTrackBook(baseBook({ sources: [] })).ok).toBe(true);
   });
 
+  // sourceUrl is stored and, per src/lib/book-detail.ts, already selected
+  // into the detail model. Nothing renders it as an <a href> yet, but a
+  // javascript: value stored today is live ammunition for the first
+  // component that does.
+  it("rejects a javascript: sourceUrl on a book.sources entry", () => {
+    const book = baseBook({
+      sources: [
+        {
+          provider: "hardcover",
+          externalId: "1",
+          sourceUrl: "javascript:alert(document.cookie)",
+        },
+      ],
+    });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+  });
+
+  it("accepts an https sourceUrl on a non-default port, unlike isSafeCoverUrl", () => {
+    const book = baseBook({
+      sources: [
+        {
+          provider: "hardcover",
+          externalId: "1",
+          sourceUrl: "https://publisher.example.com:8443/book/1",
+        },
+      ],
+    });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(true);
+  });
+
+  // The two routes used to bound this same conceptual field differently:
+  // MAX_TEXT_FIELD_LENGTH (5000) here, MAX_SOURCE_URL_LENGTH (2000) on
+  // /api/manual. Unified on the tighter bound.
+  it("rejects a book.sources sourceUrl over MAX_SOURCE_URL_LENGTH", () => {
+    const book = baseBook({
+      sources: [
+        {
+          provider: "hardcover",
+          externalId: "1",
+          sourceUrl:
+            "https://example.com/" + "x".repeat(catalogInput.MAX_SOURCE_URL_LENGTH),
+        },
+      ],
+    });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+  });
+
   it("rejects an http coverUrl, since only https is ever rendered", () => {
     const book = baseBook({ coverUrl: "http://example.com/cover.jpg" });
     expect(catalogInput.validateTrackBook(book).ok).toBe(false);
@@ -210,6 +263,28 @@ describe("validateTrackBook", () => {
     expect(catalogInput.validateTrackBook(book).ok).toBe(false);
   });
 
+  // series_position is numeric(6, 2) in src/db/schema/catalog.ts: 6 total
+  // digits, 2 after the decimal, so its magnitude tops out at 9999.99. A
+  // seriesPosition past that bound used to pass this validator, reach
+  // persist.ts's `.toString()`, and raise a Postgres "numeric field
+  // overflow" with no try/catch in the route to turn it into a 400 (E1).
+  describe("seriesPosition bound (E1)", () => {
+    it("rejects a seriesPosition whose magnitude the numeric(6,2) column cannot store", () => {
+      const book = baseBook({ seriesPosition: 12345 });
+      expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+    });
+
+    it("rejects a negative seriesPosition past the same magnitude bound", () => {
+      const book = baseBook({ seriesPosition: -12345 });
+      expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+    });
+
+    it("accepts a seriesPosition just inside the column's magnitude bound", () => {
+      const book = baseBook({ seriesPosition: 9999.99 });
+      expect(catalogInput.validateTrackBook(book).ok).toBe(true);
+    });
+  });
+
   it("rejects an unknown datePrecision value", () => {
     const book = baseBook({ datePrecision: "decade" });
     expect(catalogInput.validateTrackBook(book).ok).toBe(false);
@@ -233,6 +308,20 @@ describe("validateTrackBook", () => {
   it("accepts a well-formed releaseDate", () => {
     const book = baseBook({ releaseDate: "2027-01-15" });
     expect(catalogInput.validateTrackBook(book).ok).toBe(true);
+  });
+
+  // releases.date is a Postgres `date` column with no partial form; "2027"
+  // and "2027-01" are not valid `date` literals and used to reach it
+  // unrejected, raising the same class of 500 (E1) as the seriesPosition
+  // overflow above.
+  it("rejects a year-only releaseDate, a shape Postgres's date column rejects", () => {
+    const book = baseBook({ releaseDate: "2027" });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(false);
+  });
+
+  it("rejects a year-month releaseDate, a shape Postgres's date column rejects", () => {
+    const book = baseBook({ releaseDate: "2027-01" });
+    expect(catalogInput.validateTrackBook(book).ok).toBe(false);
   });
 
   it("rejects a confidence outside 0 to 100", () => {
@@ -345,6 +434,22 @@ describe("validateManualInput", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects a javascript: sourceUrl", () => {
+    const result = catalogInput.validateManualInput({
+      title: "T",
+      sourceUrl: "javascript:alert(1)",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts an https sourceUrl on a non-default port", () => {
+    const result = catalogInput.validateManualInput({
+      title: "T",
+      sourceUrl: "https://publisher.example.com:8443/post",
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("carries author, notes, and sourceUrl through when valid", () => {
     const result = catalogInput.validateManualInput({
       title: "T",
@@ -358,5 +463,44 @@ describe("validateManualInput", () => {
       expect(result.notes).toBe("Some notes");
       expect(result.sourceUrl).toBe("https://example.com/post");
     }
+  });
+});
+
+// Moved here from src/lib/tracks.test.ts: isValidClientReleaseDate now lives
+// in catalog-input.ts, alongside this module's other pure guards, rather
+// than in tracks.ts, which imports the database client. See the module
+// comment at the top of this file.
+describe("isValidClientReleaseDate", () => {
+  it("accepts an omitted releaseDate", () => {
+    expect(catalogInput.isValidClientReleaseDate(undefined)).toBe(true);
+  });
+
+  it("accepts a full day-precision date string", () => {
+    expect(catalogInput.isValidClientReleaseDate("2027-01-15")).toBe(true);
+  });
+
+  // CHOSEN (item 2): reject a partial date rather than normalise it. See the
+  // reasoning on isValidClientReleaseDate's own comment in catalog-input.ts.
+  it("rejects a month-precision date string; releases.date has no partial form", () => {
+    expect(catalogInput.isValidClientReleaseDate("2027-01")).toBe(false);
+  });
+
+  it("rejects a year-only date string; releases.date has no partial form", () => {
+    expect(catalogInput.isValidClientReleaseDate("2027")).toBe(false);
+  });
+
+  it("rejects a client-supplied null, refusing the withdrawal channel entirely", () => {
+    expect(catalogInput.isValidClientReleaseDate(null)).toBe(false);
+  });
+
+  it("rejects a non-string, non-null value without throwing", () => {
+    expect(catalogInput.isValidClientReleaseDate(12345)).toBe(false);
+    expect(catalogInput.isValidClientReleaseDate({})).toBe(false);
+    expect(catalogInput.isValidClientReleaseDate(["2027-01-01"])).toBe(false);
+  });
+
+  it("rejects a malformed date string", () => {
+    expect(catalogInput.isValidClientReleaseDate("not-a-date")).toBe(false);
+    expect(catalogInput.isValidClientReleaseDate("")).toBe(false);
   });
 });
