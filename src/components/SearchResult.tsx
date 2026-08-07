@@ -16,7 +16,7 @@ export function SearchResult({ book, onSelect }: Props) {
       <button
         type="button"
         onClick={() => onSelect(book)}
-        className="flex w-full items-center gap-3 border-b px-2 py-2 text-left focus-visible:outline focus-visible:outline-2"
+        className="flex w-full items-center gap-3 border-b border-rule px-2 py-2 text-left focus-visible:outline focus-visible:outline-2"
       >
         {book.coverUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -28,19 +28,19 @@ export function SearchResult({ book, onSelect }: Props) {
         ) : (
           <span
             aria-hidden="true"
-            className="aspect-[2/3] w-10 rounded-[1px] border border-dashed opacity-40"
+            className="aspect-[2/3] w-10 rounded-[1px] border border-rule border-dashed opacity-40"
           />
         )}
 
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-[family-name:var(--font-newsreader)] text-base">
+          <span className="block truncate font-display text-base">
             {book.title}
           </span>
-          <span className="block truncate text-xs opacity-70">
+          <span className="block truncate text-xs text-quiet">
             {book.authors.join(", ") || "Unknown author"}
           </span>
           {badge ? (
-            <span className="mt-1 block font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-widest opacity-80">
+            <span className="mt-1 block font-mono text-[10px] uppercase tracking-widest text-quiet">
               {badge}
             </span>
           ) : null}
