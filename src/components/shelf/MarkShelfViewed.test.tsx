@@ -42,7 +42,9 @@ describe("MarkShelfViewed", () => {
   });
 
   it("only posts once under a strict-mode double render/effect", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(null, { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     render(
