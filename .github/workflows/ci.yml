@@ -51,6 +51,19 @@ jobs:
 
       - run: pnpm build
 
+      # Both e2e suites seed and read the real database named by
+      # DATABASE_URL, so the schema there has to match the Drizzle schema the
+      # app was just built against. Nothing applied migrations here before,
+      # which worked only because someone remembered to run them by hand
+      # every time. The first schema change that forgot would have failed the
+      # suite with a missing-column error pointing at the fixture rather than
+      # at the migration, which is three files away from the real cause.
+      #
+      # This ran green for several milestones on that arrangement, so its
+      # absence was not evidence it was unnecessary, only that nobody had
+      # forgotten yet. Adding a series column is what finally forgot.
+      - run: pnpm db:migrate
+
       - run: pnpm exec playwright install --with-deps chromium
 
       - run: pnpm test:e2e

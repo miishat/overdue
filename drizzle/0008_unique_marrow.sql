@@ -1,0 +1,1 @@
+ALTER TABLE "series" ADD COLUMN "last_discovered_at" timestamp with time zone;
