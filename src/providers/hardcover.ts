@@ -128,8 +128,18 @@ function toId(value: unknown): number | undefined {
 // understating by a few weeks. The alternative asserts a date nobody
 // confirmed, which is the failure this app exists to prevent. Keeping this
 // function pure, with no "now" parameter, also keeps it trivially testable.
+// The shape check is not ceremony. release_date arrives through asString,
+// which guarantees a string and nothing about its form, so a bare "2027" or
+// a malformed value would slice to something that is not "01-01" and fall
+// through to a day claim: the exact bug this function exists to prevent,
+// reintroduced by the input we failed to look at. Anything that is not a
+// full YYYY-MM-DD gets year precision, for the same reason the January 1
+// case does.
+const FULL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function precisionForHardcoverDate(date: string | undefined): DatePrecision | undefined {
   if (!date) return undefined;
+  if (!FULL_DATE.test(date)) return "year";
   return date.slice(5, 10) === "01-01" ? "year" : "day";
 }
 

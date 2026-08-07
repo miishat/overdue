@@ -25,6 +25,17 @@ describe("precisionForHardcoverDate", () => {
     expect(precisionForHardcoverDate("2010-01-01")).toBe("year");
   });
 
+  it("returns year for anything that is not a full date, rather than claiming a day", () => {
+    // release_date reaches this function through asString, which guarantees a
+    // string and nothing about its shape. A bare year or a malformed value
+    // must not fall through to a day claim, which is the very bug this
+    // function exists to prevent.
+    expect(precisionForHardcoverDate("2027")).toBe("year");
+    expect(precisionForHardcoverDate("2027-06")).toBe("year");
+    expect(precisionForHardcoverDate("not a date")).toBe("year");
+    expect(precisionForHardcoverDate("2027-6-1")).toBe("year");
+  });
+
   it("returns day for any other date", () => {
     expect(precisionForHardcoverDate("2010-08-31")).toBe("day");
     expect(precisionForHardcoverDate("2027-01-02")).toBe("day");
