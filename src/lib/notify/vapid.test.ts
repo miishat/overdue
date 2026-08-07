@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { isPushConfigured, readVapidConfig } from "./vapid";
 
-const COMPLETE = {
+// NODE_ENV is a required, readonly member of NodeJS.ProcessEnv (added by
+// next/types/global.d.ts), so a mock env object needs a value for it to be
+// a real ProcessEnv rather than a cast that papers over a missing field.
+// vitest itself sets NODE_ENV=test while running, so "test" is honest here.
+const COMPLETE: NodeJS.ProcessEnv = {
+  NODE_ENV: "test",
   VAPID_PUBLIC_KEY: "test-public",
   VAPID_PRIVATE_KEY: "test-private",
   VAPID_SUBJECT: "mailto:someone@example.com",
-} as NodeJS.ProcessEnv;
+};
+
+const EMPTY: NodeJS.ProcessEnv = { NODE_ENV: "test" };
 
 describe("readVapidConfig", () => {
   it("reads a complete configuration", () => {
@@ -49,6 +56,6 @@ describe("readVapidConfig", () => {
 describe("isPushConfigured", () => {
   it("is true only for a complete configuration", () => {
     expect(isPushConfigured(COMPLETE)).toBe(true);
-    expect(isPushConfigured({})).toBe(false);
+    expect(isPushConfigured(EMPTY)).toBe(false);
   });
 });

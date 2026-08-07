@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 // The brief refers to this helper as `unstable_doesProxyMatch`, but the
 // installed Next 16.2.12 package still exports it under its pre-rename name,
@@ -189,7 +189,10 @@ describe("proxy", () => {
 
   it("marks the gate cookie Secure in production", () => {
     process.env.SITE_GATE_SECRET = SECRET;
-    process.env.NODE_ENV = "production";
+    // NODE_ENV is typed readonly by next/types/global.d.ts, so a direct
+    // assignment does not typecheck. vi.stubEnv is vitest's own escape
+    // hatch for exactly this and resetEnv() below still undoes it.
+    vi.stubEnv("NODE_ENV", "production");
 
     const request = new NextRequest(
       `https://example.com/library?${GATE_QUERY_PARAM}=${SECRET}`,
