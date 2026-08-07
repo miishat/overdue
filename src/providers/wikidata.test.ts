@@ -122,6 +122,22 @@ describe("candidatesFromSearchResponse", () => {
     expect(candidatesFromSearchResponse({ search: "nope" })).toEqual([]);
   });
 
+  it("drops a hit whose id is not shaped like a qid, so it never reaches SPARQL", () => {
+    // buildValuesClause interpolates these straight into a VALUES clause.
+    // These ids come from Wikidata rather than from a request body, so this
+    // is not the client-facing injection path, but an unvalidated string
+    // reaching a query language is the defect either way.
+    expect(
+      candidatesFromSearchResponse({
+        search: [
+          { id: "Q1 } SERVICE <http://evil.example/sparql> { ?s ?p ?o", label: "Crafted" },
+          { id: "not-a-qid", label: "Also bad" },
+          { id: "Q42", label: "Fine" },
+        ],
+      }),
+    ).toEqual([{ qid: "Q42", label: "Fine" }]);
+  });
+
   it("skips hits missing an id or label", () => {
     expect(
       candidatesFromSearchResponse({

@@ -113,6 +113,14 @@ export function candidatesFromSearchResponse(data: unknown): SearchCandidate[] {
       const qid = asString(hit.id);
       const label = asString(hit.label);
       if (!qid || !label) return null;
+      // Guarded here as well as at the client-facing entry points. These qids
+      // come from Wikidata's own search response rather than from a request
+      // body, so this is not the injection path A7 named. It is guarded
+      // anyway because buildValuesClause interpolates them into SPARQL, and
+      // "the upstream is trustworthy" is a claim about someone else's server
+      // that this code cannot check. Dropping a candidate whose id is not
+      // shaped like a QID costs nothing: it could not have been enriched.
+      if (!isValidQid(qid)) return null;
       return { qid, label };
     })
     .filter((c): c is SearchCandidate => c !== null);
