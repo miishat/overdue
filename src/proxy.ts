@@ -5,8 +5,47 @@ import { evaluateGate } from "@/lib/gate";
 export const GATE_COOKIE_NAME = "overdue_gate";
 export const GATE_QUERY_PARAM = "gate";
 
+// evaluateGate (src/lib/gate.ts) allows every request through when
+// SITE_GATE_SECRET is unset or blank. That default is correct for local
+// development, where nobody should need an env var just to run `pnpm dev`.
+// It also means a production deploy that forgot to set the variable is
+// fully open, silently. The project owner's call (E2 in
+// docs/audits/2026-07-30-full-audit.md) is to warn loudly rather than fail
+// closed: a forgotten variable must not take the whole site down. This
+// lives here, not in gate.ts, because gate.ts is documented pure decision
+// logic with no environment reads and no next/* imports, and evaluateGate's
+// own return contract is unchanged by this.
+//
+// The flag is module-scope so the warning fires once per process rather
+// than once per request. A per-request warning was the simpler option, but
+// production traffic would turn one missing env var into a continuous
+// scroll of identical log lines, drowning out the one signal an operator
+// actually needs to notice. A module-scope flag gives a single, findable
+// line at the cost of not re-warning after the first request in a given
+// process, which is an acceptable trade for a condition that does not
+// change while the process is running.
+let warnedMissingSecretInProduction = false;
+
+function warnIfSecretMissingInProduction(secret: string | undefined): void {
+  if (warnedMissingSecretInProduction) return;
+  if (process.env.NODE_ENV !== "production") return;
+  if (secret !== undefined && secret.trim() !== "") return;
+
+  warnedMissingSecretInProduction = true;
+  // Deliberately no secret value in this message: there is none to log in
+  // the case that triggers it, and the message must never depend on one.
+  console.warn(
+    "[overdue] SITE_GATE_SECRET is not set in production. The deployment " +
+      "shield is open: every request is being allowed through with no " +
+      "gate cookie or query-param check required. Set SITE_GATE_SECRET to " +
+      "close it.",
+  );
+}
+
 export function proxy(request: NextRequest) {
   const secret = process.env.SITE_GATE_SECRET;
+  warnIfSecretMissingInProduction(secret);
+
   const cookieValue = request.cookies.get(GATE_COOKIE_NAME)?.value;
   const suppliedSecret = request.nextUrl.searchParams.get(GATE_QUERY_PARAM);
 

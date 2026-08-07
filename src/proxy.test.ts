@@ -214,3 +214,93 @@ describe("proxy", () => {
     expect(response.status).toBe(200);
   });
 });
+
+// E2 (docs/audits/2026-07-30-full-audit.md): evaluateGate's own "allow when
+// unset" behaviour is correct for local development and stays unchanged
+// (see src/lib/gate.test.ts, unedited by this fix). What was missing is a
+// signal when that same default reaches production unnoticed. Each test
+// here loads a fresh copy of proxy.ts via vi.resetModules(), since the
+// warning is tracked with module-scope state so it fires once per process
+// rather than once per request.
+describe("proxy gate secret warning in production (E2)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  async function freshProxy() {
+    vi.resetModules();
+    const mod = await import("./proxy");
+    return mod.proxy;
+  }
+
+  it("warns exactly once across many requests when the secret is missing in production", async () => {
+    delete process.env.SITE_GATE_SECRET;
+    vi.stubEnv("NODE_ENV", "production");
+    const proxyFn = await freshProxy();
+
+    proxyFn(new NextRequest("https://example.com/library"));
+    proxyFn(new NextRequest("https://example.com/api/search"));
+    proxyFn(new NextRequest("https://example.com/"));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when the secret is present but blank, the same case evaluateGate treats as unset", async () => {
+    process.env.SITE_GATE_SECRET = "   ";
+    vi.stubEnv("NODE_ENV", "production");
+    const proxyFn = await freshProxy();
+
+    proxyFn(new NextRequest("https://example.com/library"));
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warn in production when the secret is set", async () => {
+    process.env.SITE_GATE_SECRET = SECRET;
+    vi.stubEnv("NODE_ENV", "production");
+    const proxyFn = await freshProxy();
+
+    proxyFn(new NextRequest("https://example.com/library"));
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn outside production even when the secret is missing", async () => {
+    delete process.env.SITE_GATE_SECRET;
+    vi.stubEnv("NODE_ENV", "development");
+    const proxyFn = await freshProxy();
+
+    proxyFn(new NextRequest("https://example.com/library"));
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("still allows the request through while warning, leaving evaluateGate's decision untouched", async () => {
+    delete process.env.SITE_GATE_SECRET;
+    vi.stubEnv("NODE_ENV", "production");
+    const proxyFn = await freshProxy();
+
+    const response = proxyFn(new NextRequest("https://example.com/library"));
+
+    expect(response.status).toBe(200);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never logs a secret value in the warning message", async () => {
+    process.env.SITE_GATE_SECRET = "   ";
+    vi.stubEnv("NODE_ENV", "production");
+    const proxyFn = await freshProxy();
+
+    proxyFn(new NextRequest("https://example.com/library"));
+
+    const loggedText = warnSpy.mock.calls.flat().join(" ");
+    expect(loggedText).not.toContain(SECRET);
+    expect(loggedText.length).toBeGreaterThan(0);
+  });
+});
