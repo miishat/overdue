@@ -29,7 +29,14 @@ export default defineConfig({
     url: `http://localhost:${PORT}`,
     // Never reuse. A reused server might be a different build entirely.
     reuseExistingServer: false,
-    timeout: 300_000,
+    // Ten minutes, not five. This bounds `pnpm build && next start`, and a
+    // full build is the slow part. Five minutes was enough on an idle
+    // machine (the suite itself runs in under 30 seconds) but was actually
+    // exceeded once on a developer machine that was busy running another
+    // build at the time. A timeout only bounds the wait, so a generous
+    // ceiling costs nothing when the build is fast and avoids a red CI run
+    // that says nothing about the code.
+    timeout: 600_000,
     env: {
       // Same overrides as the dev suite, and the same reasons. See the
       // comments in playwright.config.ts.
