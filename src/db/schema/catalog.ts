@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   numeric,
   pgTable,
@@ -51,7 +52,12 @@ export const books = pgTable("books", {
     .notNull()
     .defaultNow(),
   lastRefreshedAt: timestamp("last_refreshed_at", { withTimezone: true }),
-});
+},
+  // series_id is queried with inArray in four places and joined in three,
+  // on the hot path of every shelf and library render, and the design target
+  // is 300 tracked items. Audit finding F4.
+  (t) => [index("book_series_idx").on(t.seriesId)],
+);
 
 export const bookAuthors = pgTable(
   "book_authors",

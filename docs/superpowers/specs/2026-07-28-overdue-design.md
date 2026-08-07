@@ -16,7 +16,9 @@ The name is deliberate. "Overdue" is affectionate about the actual experience: t
 
 ### Audience and scale
 
-Single user in practice. Multi-tenant in the schema: real `user_id` foreign keys and row-level security from day one, so opening it to a trusted group or the public later is a deployment decision rather than a rewrite.
+Single user in practice. Multi-tenant in the schema: real `user_id` foreign keys from day one, so opening it to a trusted group or the public later is a deployment decision rather than a rewrite.
+
+**Revised 2026-08-07.** This originally also claimed row-level security from day one. That was not true in practice and the claim has been withdrawn rather than left standing. Migration `0001_rls.sql` enabled RLS with policies keyed on `current_setting('app.user_id')`, but nothing ever set that value, and `neon-http` is stateless per statement so a `SET` would not survive to the next query. It enforced nothing, and read in review as protection that was not there. Migration `0007_drop_rls.sql` removes it. Access control today is the explicit `eq(userId)` filter every query carries. Reinstating RLS requires a pooled per-request connection and belongs on the checklist for whenever `getCurrentUserId()` starts returning something real, alongside the object-scoping gap documented in `src/lib/book-detail.ts` and `src/lib/series-detail.ts`. Audit finding A10.
 
 Consequences of this choice:
 - No signup funnel. One account, magic-link auth.
