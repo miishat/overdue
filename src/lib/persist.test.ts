@@ -372,7 +372,14 @@ describe("persistResolvedBook series linkage", () => {
     state.externalIdsQueue.push([], []);
     const first = await persistResolvedBook(bookA);
 
-    state.externalIdsQueue.push([{ entityId: state.singleSeries?.id }], []);
+    // bookA's persist should have created the series row this asserts on.
+    // Narrowed with a thrown error rather than `!`, since a null here would
+    // mean the mock's onConflictDoNothing branch never ran and the rest of
+    // this test would be exercising a false premise.
+    if (!state.singleSeries) {
+      throw new Error("expected persisting bookA to create a series row");
+    }
+    state.externalIdsQueue.push([{ entityId: state.singleSeries.id }], []);
     const second = await persistResolvedBook(bookB);
 
     expect(first.seriesId).not.toBeNull();
@@ -529,7 +536,7 @@ describe("persistResolvedBook status derivation", () => {
       key: "isbn:1",
       title: "Some Book",
       authors: [],
-      provenance: { releaseDate: "wikidata" },
+      provenance: { releaseDate: "wikidata" as const },
       sources: [],
       confidence: 90,
       releaseDate: "2026-01-01",
@@ -567,7 +574,7 @@ describe("persistResolvedBook status derivation", () => {
       key: "isbn:2",
       title: "Another Book",
       authors: [],
-      provenance: { releaseDate: "google" },
+      provenance: { releaseDate: "google" as const },
       sources: [],
       confidence: 40,
     };
@@ -708,21 +715,28 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
 
   const insert = (table: unknown) => {
     return {
-      values: () => ({
-        then: (resolve: (value: undefined) => void) => resolve(undefined),
-        returning: async () => {
-          if (table === tables.books) return [{ id: "book-1" }];
-          if (table === tables.releases) return [{ id: "release-1" }];
-          return [{ id: "row-1" }];
-        },
-        onConflictDoNothing: async () => undefined,
-        onConflictDoUpdate: () => ({
+      // Takes the inserted rows, even though this generic mock ignores them,
+      // so that the two status-derivation tests further down this file can
+      // monkey-patch `values` after construction to read the row's `status`
+      // field back out, with a signature that still matches this one.
+      values: (rows: unknown) => {
+        void rows;
+        return {
+          then: (resolve: (value: undefined) => void) => resolve(undefined),
           returning: async () => {
+            if (table === tables.books) return [{ id: "book-1" }];
             if (table === tables.releases) return [{ id: "release-1" }];
             return [{ id: "row-1" }];
           },
-        }),
-      }),
+          onConflictDoNothing: async () => undefined,
+          onConflictDoUpdate: () => ({
+            returning: async () => {
+              if (table === tables.releases) return [{ id: "release-1" }];
+              return [{ id: "row-1" }];
+            },
+          }),
+        };
+      },
     };
   };
 
