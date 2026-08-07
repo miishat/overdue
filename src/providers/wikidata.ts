@@ -27,6 +27,25 @@ function qidFromUri(uri: string): string {
   return uri.split("/").pop() ?? uri;
 }
 
+// A Wikidata QID is the letter Q followed by one or more digits (Q1,
+// Q45875, ...). getBook, getSeries, and getSeriesEntries below splice their
+// externalId argument directly into a SPARQL query string via BIND, and
+// that argument reaches here straight from an anonymous POST /api/track
+// request body (src/app/api/track/route.ts -> src/lib/discover.ts ->
+// getSeriesEntriesFromAll), so it must be validated as a real QID shape
+// before it touches the query text. Without this, a crafted externalId can
+// close the BIND clause and append arbitrary SPARQL, including a SERVICE
+// clause pointing at an attacker-chosen endpoint, executed from our IP
+// against the public WDQS. A value that fails this check simply is not a
+// Wikidata entity id, so every call site below treats it as "found
+// nothing" rather than throwing: a malformed row in a batch should not
+// fail a refresh for every other book in the same slice.
+const QID_PATTERN = /^Q\d+$/;
+
+export function isValidQid(value: string): boolean {
+  return QID_PATTERN.test(value);
+}
+
 async function sparql(query: string, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
   const url = `${ENDPOINT}?query=${encodeURIComponent(query)}&format=json`;
   const data = await fetchJson(url, {
@@ -217,6 +236,7 @@ export const wikidataProvider: MetadataProvider = {
   },
 
   async getBook(externalId, signal) {
+    if (!isValidQid(externalId)) return null;
     const bindings = await sparql(
       `SELECT ?book ?bookLabel ?pubDate ?precision WHERE {
          BIND(wd:${externalId} AS ?book)
@@ -233,6 +253,7 @@ export const wikidataProvider: MetadataProvider = {
   },
 
   async getSeries(externalId, signal) {
+    if (!isValidQid(externalId)) return null;
     const bindings = await sparql(
       `SELECT ?book ?bookLabel WHERE {
          BIND(wd:${externalId} AS ?book)
@@ -252,6 +273,7 @@ export const wikidataProvider: MetadataProvider = {
   },
 
   async getSeriesEntries(externalId, signal) {
+    if (!isValidQid(externalId)) return [];
     const bindings = await sparql(entriesQuery(externalId), signal);
     return bindings
       .map(toProviderBook)
