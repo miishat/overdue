@@ -1,14 +1,8 @@
+import { validateManualInput } from "@/lib/catalog-input";
 import { getCurrentUserId } from "@/lib/current-user";
 import { persistResolvedBook } from "@/lib/persist";
 import { insertTrack } from "@/lib/tracks";
 import type { ResolvedBook } from "@/resolution/resolve";
-
-interface ManualRequest {
-  title: string;
-  author?: string;
-  notes?: string;
-  sourceUrl?: string;
-}
 
 // Normalize a string for use in deduplication keys. Trims, lowercases, and
 // collapses internal whitespace. Stability is critical: this derivation is
@@ -21,13 +15,22 @@ function normalizeKey(text: string): string {
 export async function POST(request: Request): Promise<Response> {
   const userId = await getCurrentUserId();
 
-  const body = (await request.json()) as Partial<ManualRequest>;
-  const title = body.title?.trim();
-  if (!title) {
-    return Response.json({ error: "title is required" }, { status: 400 });
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    return Response.json({ error: "Malformed JSON body" }, { status: 400 });
   }
 
-  const author = body.author?.trim();
+  // validateManualInput is a narrowing guard rather than a cast: the old
+  // `as Partial<ManualRequest>` let a non-string title reach
+  // `body.title?.trim()`, throwing a TypeError (a 500) instead of a 400,
+  // and let author, notes, and sourceUrl through at any length.
+  const validation = validateManualInput(parsed);
+  if (!validation.ok) {
+    return Response.json({ error: validation.error }, { status: 400 });
+  }
+  const { title, author, notes, sourceUrl } = validation;
 
   // Generate a stable identifier from the normalized title and author.
   // The author is included if provided to distinguish books with the same
@@ -45,13 +48,13 @@ export async function POST(request: Request): Promise<Response> {
     key: `manual:${normalizedTitle}`,
     title,
     authors: author ? [author] : [],
-    description: body.notes?.trim() || undefined,
+    description: notes,
     provenance: { title: "manual", authors: "manual" },
     sources: [
       {
         provider: "manual",
         externalId: stableExternalId,
-        sourceUrl: body.sourceUrl?.trim() || undefined,
+        sourceUrl,
       },
     ],
     confidence: 100,

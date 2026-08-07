@@ -143,6 +143,16 @@ export function precisionForHardcoverDate(date: string | undefined): DatePrecisi
   return date.slice(5, 10) === "01-01" ? "year" : "day";
 }
 
+// Same idiom as google-books.ts's toProviderBook, which normalises an http
+// thumbnail to https rather than reject it. isSafeCoverUrl (src/lib/covers.ts)
+// requires https, so an http Hardcover cover passed through unchanged would
+// be silently rejected at validation and the book would render a Gap where
+// a real cover exists.
+function normalisedCoverUrl(image: Record<string, unknown> | null): string | undefined {
+  const raw = image ? asString(image.url) : undefined;
+  return raw?.replace(/^http:/, "https:");
+}
+
 // Maps a Typesense "document" from the search endpoint's results.hits[] to
 // a ProviderBook. This is a different shape than the Hasura `books` row
 // used by getBook/getSeriesEntries (see toProviderBook below), so it gets
@@ -176,7 +186,7 @@ function toProviderBookFromSearchDocument(documentValue: unknown): ProviderBook 
     seriesName,
     seriesExternalId: seriesId !== undefined ? String(seriesId) : undefined,
     seriesPosition,
-    coverUrl: image ? asString(image.url) : undefined,
+    coverUrl: normalisedCoverUrl(image),
     description: asString(document.description),
     releaseDate,
     datePrecision: precisionForHardcoverDate(releaseDate),
@@ -212,7 +222,7 @@ function toProviderBook(bookValue: unknown): ProviderBook | null {
     seriesName,
     seriesExternalId: seriesId !== undefined ? String(seriesId) : undefined,
     seriesPosition,
-    coverUrl: image ? asString(image.url) : undefined,
+    coverUrl: normalisedCoverUrl(image),
     description: asString(book.description),
     releaseDate,
     datePrecision: precisionForHardcoverDate(releaseDate),

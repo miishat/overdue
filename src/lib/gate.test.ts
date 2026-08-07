@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { evaluateGate } from "./gate";
+import { evaluateGate, hasGateSecret } from "./gate";
 
 const SECRET = "correct-horse-battery-staple";
+
+// Shared with src/proxy.ts's production warning, which used to re-derive
+// this same "unset or blank" condition separately. See the comment on
+// hasGateSecret.
+describe("hasGateSecret", () => {
+  it("is false when the secret is undefined", () => {
+    expect(hasGateSecret(undefined)).toBe(false);
+  });
+
+  it("is false when the secret is an empty or whitespace-only string", () => {
+    expect(hasGateSecret("")).toBe(false);
+    expect(hasGateSecret("   ")).toBe(false);
+  });
+
+  it("is true when the secret has content", () => {
+    expect(hasGateSecret(SECRET)).toBe(true);
+  });
+});
 
 describe("evaluateGate", () => {
   it("allows when secret is unset", () => {

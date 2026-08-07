@@ -146,6 +146,56 @@ describe("hardcoverProvider", () => {
     await expect(hardcoverProvider.searchBooks("x")).resolves.toEqual([]);
   });
 
+  // google-books.ts normalises an http thumbnail to https (see its
+  // toProviderBook). This adapter passed image.url through unchanged, so an
+  // http Hardcover cover would be silently rejected by isSafeCoverUrl (which
+  // requires https) and the book would render a Gap instead of its cover.
+  it("normalises an http cover URL to https on a search result, matching google-books.ts's idiom", async () => {
+    server.use(
+      http.post(ENDPOINT, () =>
+        HttpResponse.json({
+          data: {
+            search: {
+              results: {
+                hits: [
+                  {
+                    document: {
+                      id: "555",
+                      title: "Insecure Cover",
+                      image: { url: "http://hardcover.app/cover-insecure.jpg" },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    );
+    const results = await hardcoverProvider.searchBooks("insecure cover");
+    expect(results[0].coverUrl).toBe("https://hardcover.app/cover-insecure.jpg");
+  });
+
+  it("normalises an http cover URL to https on getBook", async () => {
+    server.use(
+      http.post(ENDPOINT, () =>
+        HttpResponse.json({
+          data: {
+            books: [
+              {
+                id: 555,
+                title: "Insecure Cover",
+                image: { url: "http://hardcover.app/cover-insecure.jpg" },
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const result = await hardcoverProvider.getBook("555");
+    expect(result?.coverUrl).toBe("https://hardcover.app/cover-insecure.jpg");
+  });
+
   it("returns an empty array when search.results.hits is not an array", async () => {
     server.use(
       http.post(ENDPOINT, () =>

