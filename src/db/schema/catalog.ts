@@ -34,6 +34,10 @@ export const series = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // Mirrors books.lastRefreshedAt: null means never discovered, and the
+    // scheduled discovery slice (src/lib/discover-series.ts) orders on it the
+    // same way selectSlice orders books, oldest/never first.
+    lastDiscoveredAt: timestamp("last_discovered_at", { withTimezone: true }),
   },
   (t) => [unique("series_title_unique").on(t.title)],
 );

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscoveryCandidate } from "@/lib/refresh/discovery-run";
+import type { ResolvedBook } from "@/resolution/resolve";
 
 // db/client.ts throws if DATABASE_URL is unset. port.ts imports it
 // transitively, so a placeholder here lets the route import cleanly without
@@ -22,6 +24,20 @@ vi.mock("@/lib/refresh/port", () => ({
     commitRefetched,
     markRefreshed,
     enqueue,
+  },
+}));
+
+const trackedSeries = vi.fn(async (): Promise<DiscoveryCandidate[]> => []);
+const discover = vi.fn(async (): Promise<ResolvedBook[]> => []);
+const persistDiscovered = vi.fn(async () => ({ bookId: "b1", seriesId: null }));
+const markDiscovered = vi.fn(async () => undefined);
+
+vi.mock("@/lib/refresh/discovery-port", () => ({
+  drizzleDiscoveryPort: {
+    trackedSeries,
+    discover,
+    persist: persistDiscovered,
+    markDiscovered,
   },
 }));
 vi.mock("@/lib/current-user", () => ({
@@ -83,6 +99,10 @@ describe("POST /api/refresh", () => {
       callOrder.push("refresh:candidates");
       return [];
     });
+    trackedSeries.mockImplementation(async () => {
+      callOrder.push("discover:trackedSeries");
+      return [];
+    });
     drainQueue.mockImplementation(async () => {
       callOrder.push("drain:drainQueue");
       return { claimed: 0, sent: 0, failed: 0 };
@@ -104,6 +124,7 @@ describe("POST /api/refresh", () => {
 
     expect(res.status).toBe(401);
     expect(candidates).not.toHaveBeenCalled();
+    expect(trackedSeries).not.toHaveBeenCalled();
   });
 
   it("returns 401 and never calls the port for a wrong secret", async () => {
@@ -134,7 +155,17 @@ describe("POST /api/refresh", () => {
 
     expect(res.status).toBe(200);
     expect(candidates).toHaveBeenCalledTimes(1);
-    expect(body).toMatchObject({ examined: 0, changed: 0, changeRows: 0, failures: 0 });
+    expect(trackedSeries).toHaveBeenCalledTimes(1);
+    expect(body).toMatchObject({
+      examined: 0,
+      changed: 0,
+      changeRows: 0,
+      failures: 0,
+      seriesExamined: 0,
+      entriesFound: 0,
+      entriesPersisted: 0,
+      discoveryFailures: 0,
+    });
   });
 
   it("returns 503 and never calls the port when CRON_SECRET is unset", async () => {
@@ -222,7 +253,44 @@ describe("POST /api/refresh", () => {
 
     expect(res.status).toBe(200);
     expect(drainQueue).toHaveBeenCalledTimes(1);
-    expect(callOrder).toEqual(["refresh:candidates", "drain:drainQueue"]);
+    // Discovery runs after book refresh and before the drain: any future
+    // notification work it does must still be queued before the drain reads
+    // the queue.
+    expect(callOrder).toEqual([
+      "refresh:candidates",
+      "discover:trackedSeries",
+      "drain:drainQueue",
+    ]);
+  });
+
+  it("includes the discovery counts in the response body", async () => {
+    process.env.CRON_SECRET = SECRET;
+    trackedSeries.mockImplementation(async () => [
+      { seriesId: "s1", lastDiscoveredAt: null, refs: [{ provider: "hardcover", externalId: "1" }] },
+    ]);
+    discover.mockImplementation(async () => [
+      {
+        key: "b1",
+        title: "Book One",
+        authors: [],
+        provenance: {},
+        sources: [{ provider: "hardcover", externalId: "b1" }],
+        confidence: 80,
+      },
+    ]);
+
+    const res = await post({ Authorization: `Bearer ${SECRET}` });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(persistDiscovered).toHaveBeenCalledTimes(1);
+    expect(markDiscovered).toHaveBeenCalledWith(["s1"], expect.any(Date));
+    expect(body).toMatchObject({
+      seriesExamined: 1,
+      entriesFound: 1,
+      entriesPersisted: 1,
+      discoveryFailures: 0,
+    });
   });
 
   it("does not turn a successful refresh into a 500 when the drain fails", async () => {

@@ -4,6 +4,8 @@ import { drainQueue, type DrainResult } from "@/lib/notify/drain";
 import { drizzleNotificationQueue } from "@/lib/notify/queue";
 import { createWebPushTransport } from "@/lib/notify/send";
 import { drizzleSubscriptionStore } from "@/lib/push/subscriptions";
+import { drizzleDiscoveryPort } from "@/lib/refresh/discovery-port";
+import { runSeriesDiscovery } from "@/lib/refresh/discovery-run";
 import { drizzleRefreshPort } from "@/lib/refresh/port";
 import { runRefresh } from "@/lib/refresh/run";
 
@@ -95,6 +97,23 @@ export async function POST(request: Request): Promise<Response> {
   const now = new Date();
   const result = await runRefresh(drizzleRefreshPort, now);
 
+  // Series discovery runs in the same scheduled job as book refresh, not as
+  // a one-off at track time. This is what closes the spec gap in section 8
+  // ("the app owns discovering new entries... the user never adds book five
+  // manually"): a series announced after it was tracked, or a track-time
+  // discovery cut short by after()'s finite budget, is completed here on the
+  // next run instead of never again. See discovery-run.ts for the failure
+  // isolation (one bad series does not stop the rest) and discovery-slice.ts
+  // for the bound.
+  //
+  // Runs after book refresh, before the drain, so any future notification
+  // work discovery does would still be queued before the drain reads the
+  // queue. Not wrapped in a try/catch the way runDrain is: a hard failure
+  // here (e.g. unable to even list tracked series) is core job work, exactly
+  // like a hard failure from runRefresh's own candidates() call, and both are
+  // allowed to surface as a 500 rather than being swallowed.
+  const discoveryResult = await runSeriesDiscovery(drizzleDiscoveryPort, now);
+
   // The drain runs after the refresh, not before: an alert must never be
   // sent for a change whose history row has not been durably written yet.
   const drainResult = await runDrain(now);
@@ -108,6 +127,10 @@ export async function POST(request: Request): Promise<Response> {
       changed: result.changed,
       changeRows: result.changeRows,
       failures: result.failures.length,
+      seriesExamined: discoveryResult.seriesExamined,
+      entriesFound: discoveryResult.entriesFound,
+      entriesPersisted: discoveryResult.entriesPersisted,
+      discoveryFailures: discoveryResult.failures.length,
       notificationsClaimed: drainResult.claimed,
       notificationsSent: drainResult.sent,
       notificationsFailed: drainResult.failed,
