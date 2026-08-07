@@ -60,7 +60,11 @@ describe("TrackPrompt", () => {
     const secondary = screen.getByRole("button", { name: "Just this book" });
     expect(secondary.className).toContain("text-sm");
     expect(secondary.className).toContain("underline");
-    expect(secondary.className).toContain("opacity-70");
+    // text-quiet, not opacity-70: the assertion pins the same property
+    // (the secondary action is de-emphasised) against the design token
+    // rather than a raw utility, so the search route participates in the
+    // theme swap the alternate themes depend on.
+    expect(secondary.className).toContain("text-quiet");
     expect(secondary.className).not.toContain("font-medium");
   });
 

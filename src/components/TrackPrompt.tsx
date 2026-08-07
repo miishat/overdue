@@ -30,7 +30,7 @@ export function TrackPrompt({ book, onDone }: Props) {
 
   if (!book.seriesName) {
     return (
-      <div className="flex flex-col gap-3 border-t pt-4">
+      <div className="flex flex-col gap-3 border-t border-rule pt-4">
         <p className="text-sm">
           Track <span className="font-medium">{book.title}</span>?
         </p>
@@ -38,7 +38,7 @@ export function TrackPrompt({ book, onDone }: Props) {
           type="button"
           disabled={saving}
           onClick={() => track("book")}
-          className="rounded-sm border px-3 py-2"
+          className="rounded-sm border border-rule px-3 py-2"
         >
           Track this book
         </button>
@@ -48,7 +48,7 @@ export function TrackPrompt({ book, onDone }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-3 border-t pt-4">
+    <div className="flex flex-col gap-3 border-t border-rule pt-4">
       <p className="text-sm">
         This is part of{" "}
         <span className="font-medium">{book.seriesName}</span>. Track the whole
@@ -58,7 +58,7 @@ export function TrackPrompt({ book, onDone }: Props) {
         type="button"
         disabled={saving}
         onClick={() => track("series")}
-        className="rounded-sm border px-3 py-2 font-medium"
+        className="rounded-sm border border-rule px-3 py-2 font-medium"
       >
         Track the series
       </button>
@@ -66,7 +66,7 @@ export function TrackPrompt({ book, onDone }: Props) {
         type="button"
         disabled={saving}
         onClick={() => track("book")}
-        className="text-sm underline opacity-70"
+        className="text-sm underline text-quiet"
       >
         Just this book
       </button>

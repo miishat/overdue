@@ -131,11 +131,11 @@ export function SearchBox({ onSelect }: Props) {
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Title or author"
-        className="rounded-sm border px-3 py-2"
+        className="rounded-sm border border-rule px-3 py-2"
         autoComplete="off"
       />
 
-      <p aria-live="polite" className="text-sm opacity-70">
+      <p aria-live="polite" className="text-sm text-quiet">
         {loading ? "Searching..." : ""}
       </p>
 
@@ -150,9 +150,9 @@ export function SearchBox({ onSelect }: Props) {
           onSubmit={(event) => {
             void handleManualSubmit(event);
           }}
-          className="flex flex-col gap-2 border-t pt-3"
+          className="flex flex-col gap-2 border-t border-rule pt-3"
         >
-          <p className="text-sm opacity-70">
+          <p className="text-sm text-quiet">
             Can&rsquo;t find it? Add it by hand and it&rsquo;ll take priority
             over anything providers report later.
           </p>
@@ -167,7 +167,7 @@ export function SearchBox({ onSelect }: Props) {
             onChange={(event) =>
               setManualForm({ ...manualForm, title: event.target.value })
             }
-            className="rounded-sm border px-3 py-2"
+            className="rounded-sm border border-rule px-3 py-2"
             required
           />
 
@@ -181,7 +181,7 @@ export function SearchBox({ onSelect }: Props) {
             onChange={(event) =>
               setManualForm({ ...manualForm, author: event.target.value })
             }
-            className="rounded-sm border px-3 py-2"
+            className="rounded-sm border border-rule px-3 py-2"
           />
 
           <label htmlFor="manual-notes" className="text-sm">
@@ -194,7 +194,7 @@ export function SearchBox({ onSelect }: Props) {
             onChange={(event) =>
               setManualForm({ ...manualForm, notes: event.target.value })
             }
-            className="rounded-sm border px-3 py-2"
+            className="rounded-sm border border-rule px-3 py-2"
           />
 
           <label htmlFor="manual-source-url" className="text-sm">
@@ -207,12 +207,12 @@ export function SearchBox({ onSelect }: Props) {
             onChange={(event) =>
               setManualForm({ ...manualForm, sourceUrl: event.target.value })
             }
-            className="rounded-sm border px-3 py-2"
+            className="rounded-sm border border-rule px-3 py-2"
             placeholder="Where did you see this? e.g. the author's blog"
           />
 
           {manualError ? (
-            <p role="alert" className="text-sm text-red-600">
+            <p role="alert" className="text-sm text-quiet">
               {manualError}
             </p>
           ) : null}
@@ -220,7 +220,7 @@ export function SearchBox({ onSelect }: Props) {
           <button
             type="submit"
             disabled={manualPending || manualForm.title.trim().length === 0}
-            className="self-start rounded-sm border px-3 py-2 text-sm disabled:opacity-50"
+            className="self-start rounded-sm border border-rule px-3 py-2 text-sm disabled:opacity-50"
           >
             {manualPending ? "Adding..." : "Add it by hand"}
           </button>
