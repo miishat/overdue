@@ -66,7 +66,7 @@ export function TrackPrompt({ book, onDone }: Props) {
         type="button"
         disabled={saving}
         onClick={() => track("book")}
-        className="text-sm underline opacity-70"
+        className="text-sm underline text-quiet"
       >
         Just this book
       </button>
