@@ -48,3 +48,11 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
 
       - run: pnpm test:e2e
+
+      # The dev-mode suite above runs against `next dev`, where Serwist is
+      # disabled by next.config.ts, so it cannot see the service worker, the
+      # offline fallback, or the cover cache at all. This project's own
+      # history is the argument for adding it: M3's gate bug survived review
+      # because the e2e suite ran with the very protection that broke it
+      # switched off. This step builds and serves the real thing.
+      - run: pnpm test:e2e:prod

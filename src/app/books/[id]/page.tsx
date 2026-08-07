@@ -3,6 +3,7 @@ import { ReadStateControl } from "@/components/ReadStateControl";
 import { Gap } from "@/components/shelf/Gap";
 import { ProvenanceStamp } from "@/components/shelf/ProvenanceStamp";
 import { drizzleBookDetailSource, loadBookDetail } from "@/lib/book-detail";
+import { coverSrcFor } from "@/lib/covers";
 import { formatImprecise, formatMove } from "@/lib/provenance";
 import { drizzleReadStateStore, readStatesFor } from "@/lib/read-state";
 
@@ -30,13 +31,21 @@ export default async function BookDetailPage({
   const readStates = await readStatesFor([book.id], drizzleReadStateStore);
   const readState = readStates.get(book.id) ?? null;
 
+  // Book detail always has a real book row, so bookId is book.id.
+  // BookDetail declares `coverUrl: string | null` (src/lib/book-detail.ts:27),
+  // so no null coalescing is needed here.
+  const coverSrc = coverSrcFor({ bookId: book.id, coverUrl: book.coverUrl });
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <div className="mb-8 flex gap-4">
         <div data-slot="cover">
-          {book.coverUrl ? (
+          {coverSrc ? (
+            // Deliberately not next/image; see the note in
+            // src/components/shelf/ShelfRow.tsx for the reasoning.
+            // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={book.coverUrl}
+              src={coverSrc}
               alt={book.title}
               width={COVER_WIDTH}
               height={COVER_WIDTH * 1.5}

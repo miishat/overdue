@@ -1,3 +1,4 @@
+import { InstallSection } from "@/components/install/InstallSection";
 import { EnablePush } from "@/components/push/EnablePush";
 import {
   PublicSubscription,
@@ -33,6 +34,12 @@ export default async function SettingsPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="mb-6 font-display text-[26px] text-body">Settings</h1>
+      <section className="mb-8">
+        <h2 className="mb-3 font-mono text-[11px] uppercase tracking-wide text-quiet">
+          Install
+        </h2>
+        <InstallSection />
+      </section>
       <section className="mb-8">
         <h2 className="mb-3 font-mono text-[11px] uppercase tracking-wide text-quiet">
           Notifications

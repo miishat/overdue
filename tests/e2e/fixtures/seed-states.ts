@@ -26,6 +26,39 @@ const BOOK_RUMORED_ID = "eeeeeeee-0000-4000-8000-000000000004";
 // synthesise for the same series.
 const BOOK_HIATUS_ANCHOR_ID = "eeeeeeee-0000-4000-8000-000000000005";
 
+/**
+ * Task 12 fixture: a real, isSafeCoverUrl-passing cover for BOOK_DATED_ID, so
+ * the production e2e suite's cover assertions (tests/e2e-prod/pwa.spec.ts)
+ * have a genuine row to exercise instead of skipping. isSafeCoverUrl only
+ * inspects the URL's shape (https, non-private host), so any real https
+ * image host would pass; this one is a deliberate pick, not an arbitrary
+ * one.
+ *
+ * Open Library's `/b/id/<coverId>-L.jpg` form 302-redirects to an
+ * archive.org zip-hosted image for most cover ids (verified against several,
+ * including the one this fixture used before), and src/app/api/covers/
+ * [bookId]/route.ts fetches with `redirect: "error"` on purpose (never
+ * follow a redirect off the address isSafeCoverUrl already checked), so a
+ * redirecting id would make our own proxy 502 every single time and the
+ * "already seen" offline test could never observe a real rendered image.
+ * The ISBN form (`/b/isbn/<isbn>-L.jpg`) for this specific, well-known ISBN
+ * (Harper Lee, "To Kill a Mockingbird") answers 200 directly with a real
+ * JPEG (verified by hand: 332x500, no redirect), which is what actually
+ * lets the render-while-offline assertion mean something.
+ *
+ * Known side effect on the dev-mode suite, accepted rather than overlooked.
+ * Serwist is disabled under `next dev`, so nothing intercepts the request:
+ * any dev spec that renders a row for "E2E Dated Book" now makes a real
+ * outbound fetch to covers.openlibrary.org through the covers route. Before
+ * this fixture, no seeded book had a cover and the dev suite reached no
+ * external host at all. It stays non-fatal: the covers route answers 502 on
+ * an unreachable upstream, the <img> simply fails to paint, and no dev spec
+ * asserts on a cover, so a sandboxed or offline runner degrades to a broken
+ * image rather than a red suite. If a dev spec ever does assert on a cover,
+ * that reasoning stops holding and this needs an interception layer.
+ */
+const BOOK_DATED_COVER_URL = "https://covers.openlibrary.org/b/isbn/9780061120084-L.jpg";
+
 const RELEASE_DATED_ID = "eeeeeeee-0000-4000-8000-000000000011";
 const RELEASE_ESTIMATED_ID = "eeeeeeee-0000-4000-8000-000000000012";
 const RELEASE_ANNOUNCED_ID = "eeeeeeee-0000-4000-8000-000000000013";
@@ -367,6 +400,7 @@ export async function seedAllStates(): Promise<void> {
       title: "E2E Dated Book",
       seriesId: null,
       seriesPosition: null,
+      coverUrl: BOOK_DATED_COVER_URL,
     },
     {
       id: BOOK_ESTIMATED_ID,

@@ -1,3 +1,4 @@
+import { InstallPrompt } from "@/components/install/InstallPrompt";
 import { MarkShelfViewed } from "@/components/shelf/MarkShelfViewed";
 import { WaitingShelf } from "@/components/shelf/WaitingShelf";
 import { getCurrentUserId } from "@/lib/current-user";
@@ -33,6 +34,10 @@ export default async function Home() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="mb-6 font-display text-[26px] text-body">Waiting</h1>
+      {/* entries.length is exactly "has the user tracked something", and it
+          is already loaded, so gating the prompt on it costs no query. Spec
+          section 10: never on first load. */}
+      <InstallPrompt trackedCount={entries.length} />
       <WaitingShelf entries={entries} now={now} changedIds={changedIds} />
       <MarkShelfViewed viewedAt={now} />
     </main>
