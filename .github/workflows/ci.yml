@@ -41,6 +41,12 @@ jobs:
 
       - run: pnpm lint
 
+      # Vitest transpiles test files without typechecking them, so a type
+      # error in a test is invisible to `pnpm test` and was invisible to
+      # this whole pipeline until now. Runs before the test step so a type
+      # error fails fast instead of waiting on the full suite.
+      - run: pnpm typecheck
+
       - run: pnpm test
 
       - run: pnpm build
