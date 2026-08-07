@@ -22,6 +22,27 @@ vi.mock("@/lib/discover", () => ({
   discoverSeriesEntries: vi.fn(async () => []),
 }));
 
+// The route schedules series discovery with `after` so it runs once the
+// response is sent. These tests call POST directly rather than through the
+// Next runtime, where `after` would have no request context, so it is
+// captured here instead. Nothing runs the callbacks automatically: a test
+// that wants the discovery work to happen has to call runScheduledWork,
+// which is what lets "the response comes back before discovery" be asserted
+// rather than assumed.
+const scheduledWork: Array<() => Promise<void> | void> = [];
+vi.mock("next/server", () => ({
+  after: (callback: () => Promise<void> | void) => {
+    scheduledWork.push(callback);
+  },
+}));
+
+async function runScheduledWork(): Promise<void> {
+  const pending = scheduledWork.splice(0);
+  for (const callback of pending) {
+    await callback();
+  }
+}
+
 const book = {
   key: "isbn:9780008501815",
   title: "Babel",
@@ -98,6 +119,7 @@ describe("POST /api/track", () => {
       book: { ...book, sources: [{ provider: "hardcover", externalId: "77" }] },
       scope: "series",
     });
+    await runScheduledWork();
 
     expect(res.status).toBe(201);
     expect(insertTrack).toHaveBeenCalledWith("u1", {
@@ -231,7 +253,30 @@ describe("POST /api/track with series scope", () => {
       scope: "series",
     });
 
+    // The response is already out at this point, and only the selected book
+    // has been written. This is the assertion that would fail if discovery
+    // were moved back onto the request path.
+    expect(persistResolvedBook).toHaveBeenCalledTimes(1);
+
+    await runScheduledWork();
+
     // Once for the selected book, then once per discovered entry.
     expect(persistResolvedBook).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns before discovery has made a single provider call", async () => {
+    const { discoverSeriesEntries } = await import("@/lib/discover");
+    vi.mocked(discoverSeriesEntries).mockClear();
+
+    const res = await post({
+      book: { ...book, sources: [{ provider: "hardcover", externalId: "77" }] },
+      scope: "series",
+    });
+
+    expect(res.status).toBe(201);
+    expect(discoverSeriesEntries).not.toHaveBeenCalled();
+
+    await runScheduledWork();
+    expect(discoverSeriesEntries).toHaveBeenCalledTimes(1);
   });
 });
