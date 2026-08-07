@@ -536,6 +536,30 @@ function makeSingleEntityState() {
     seriesByTitle: new Map<string, string>(),
     lastSeriesInsertTitle: null as string | null,
     updateCalls: [] as Record<string, unknown>[],
+    // Author upsert (companion fix to A8) tracking. authorsByName simulates
+    // the persisted authors table by name (there is no unique constraint on
+    // authors.name, so this is a plain lookup map, not an upsert target).
+    // bookAuthorRows simulates book_authors, deduped the same way
+    // onConflictDoNothing would dedupe it: by (bookId, authorId).
+    authorsByName: new Map<string, string>(),
+    authorInsertCount: 0,
+    bookAuthorRows: [] as { bookId: string; authorId: string; position: number }[],
+    // Per-statement counts, not per-row: incremented once per
+    // select/insert call regardless of how many names or rows it carries,
+    // so a test can assert the statement count stayed flat as author count
+    // grows.
+    authorSelectStatements: 0,
+    authorInsertStatements: 0,
+    bookAuthorsInsertStatements: 0,
+    // Disambiguates a per-name authors select (old code: `eq(authors.name,
+    // x).limit(1)`, one name per call) from a bulk authors select (new
+    // code: `inArray(authors.name, [...]).` with no `.limit()`, one call
+    // for every name). The mock can't introspect the real drizzle
+    // where-clause to know which single name an `eq` lookup is for, so a
+    // test priming a per-name lookup must push the expected names here in
+    // call order, same convention as externalIdsQueue above. A bulk lookup
+    // ignores this queue entirely and returns everything known.
+    singleAuthorLookupQueue: [] as string[],
   };
 }
 
@@ -546,13 +570,49 @@ function makeSingleEntityDbMock(
     releases: unknown;
     releaseSources: unknown;
     externalIds: unknown;
+    authors?: unknown;
+    bookAuthors?: unknown;
   },
   state: ReturnType<typeof makeSingleEntityState>,
 ) {
   const select = () => ({
     from: (table: unknown) => ({
-      where: () => ({
-        limit: async () => {
+      where: () => {
+        if (table === tables.authors) {
+          // A per-name select (old code: `eq(...).limit(1)`) and a bulk
+          // select (new code: `inArray(...)`, awaited directly, no
+          // `.limit()`) need different results, and the mock can't tell
+          // which specific name an `eq` lookup was for. So `.limit()` here
+          // consumes one entry from the test-primed singleAuthorLookupQueue
+          // (one call per name, old code's shape), while awaiting the
+          // returned object directly (no `.limit()`) returns everything
+          // known in one call (new code's shape). Each path counts its own
+          // statement exactly once.
+          return {
+            limit: async () => {
+              state.authorSelectStatements += 1;
+              const name = state.singleAuthorLookupQueue.shift();
+              if (name === undefined) return [];
+              const id = state.authorsByName.get(name);
+              return id ? [{ id, name }] : [];
+            },
+            then: (
+              onFulfilled: (value: unknown[]) => void,
+              onRejected?: (reason: unknown) => void,
+            ) => {
+              state.authorSelectStatements += 1;
+              const result = [...state.authorsByName.entries()].map(([name, id]) => ({
+                id,
+                name,
+              }));
+              return Promise.resolve(result).then(onFulfilled, onRejected);
+            },
+          };
+        }
+
+        // Computed eagerly (at `.where()` time) rather than inside `.limit`,
+        // matching the original shape of this mock for every other table.
+        const resultPromise = (async (): Promise<unknown[]> => {
           if (table === tables.externalIds) return state.externalIdsQueue.shift() ?? [];
           if (table === tables.series) {
             const title = state.lastSeriesInsertTitle;
@@ -563,8 +623,15 @@ function makeSingleEntityDbMock(
             return state.singleBook ? [{ seriesId: state.singleBook.seriesId }] : [];
           }
           return [];
-        },
-      }),
+        })();
+        return {
+          limit: async () => resultPromise,
+          then: (
+            onFulfilled: (value: unknown[]) => void,
+            onRejected?: (reason: unknown) => void,
+          ) => resultPromise.then(onFulfilled, onRejected),
+        };
+      },
     }),
   });
 
@@ -593,6 +660,19 @@ function makeSingleEntityDbMock(
           return [{ id }];
         }
         if (table === tables.releases) return [{ id: "release-1" }];
+        if (table === tables.authors) {
+          state.authorInsertStatements += 1;
+          const inserted = (Array.isArray(rows) ? rows : [rows]) as {
+            name: string;
+            sortName: string;
+          }[];
+          return inserted.map((row) => {
+            state.authorInsertCount += 1;
+            const id = `author-${state.authorInsertCount}`;
+            state.authorsByName.set(row.name, id);
+            return { id, name: row.name };
+          });
+        }
         return [{ id: "row-1" }];
       },
       onConflictDoNothing: async () => {
@@ -604,6 +684,21 @@ function makeSingleEntityDbMock(
             const id = `series-${state.seriesInsertCount}`;
             state.seriesByTitle.set(row.title, id);
             state.singleSeries = { id, title: row.title };
+          }
+        }
+        if (table === tables.bookAuthors) {
+          state.bookAuthorsInsertStatements += 1;
+          const inserted = (Array.isArray(rows) ? rows : [rows]) as {
+            bookId: string;
+            authorId: string;
+            position: number;
+          }[];
+          for (const row of inserted) {
+            const exists = state.bookAuthorRows.some(
+              (existing) =>
+                existing.bookId === row.bookId && existing.authorId === row.authorId,
+            );
+            if (!exists) state.bookAuthorRows.push(row);
           }
         }
         return undefined;
@@ -635,6 +730,130 @@ function makeSingleEntityDbMock(
 
   return { select, insert, update, delete: del, batch };
 }
+
+// Companion to A8: upsertAuthors ran a select, a conditional insert, and a
+// bookAuthors insert per author, so a book with N authors issued 3*N
+// statements. These tests pin the behavior a batched rewrite (one select
+// for every name, one insert for the missing names, one insert for every
+// book_authors row) must preserve, and assert the statement count actually
+// drops instead of just trusting the description of the change.
+describe("persistResolvedBook author upsert", () => {
+  it("persists three authors with positions preserved, using a flat number of statements regardless of author count", async () => {
+    vi.resetModules();
+
+    const { books, series, authors, bookAuthors } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock(
+        { books, series, releases, releaseSources, externalIds, authors, bookAuthors },
+        state,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    state.externalIdsQueue.push([]);
+    // Only consumed if the implementation under test still does a per-name
+    // `.limit(1)` lookup; the batched implementation ignores this queue
+    // entirely (see singleAuthorLookupQueue's comment above).
+    state.singleAuthorLookupQueue.push("Neil Gaiman", "Terry Pratchett", "Homer");
+    const result = await persistResolvedBook({
+      key: "isbn:three-authors",
+      title: "Book With Three Authors",
+      authors: ["Neil Gaiman", "Terry Pratchett", "Homer"],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-3-authors" }],
+      confidence: 90,
+    });
+
+    const rowsByName = new Map(
+      [...state.authorsByName.entries()].map(([name, id]) => [id, name]),
+    );
+    const positionsByName = new Map(
+      state.bookAuthorRows.map((row) => [rowsByName.get(row.authorId), row.position]),
+    );
+
+    expect(state.bookAuthorRows).toHaveLength(3);
+    expect(state.bookAuthorRows.every((row) => row.bookId === result.bookId)).toBe(true);
+    expect(positionsByName.get("Neil Gaiman")).toBe(0);
+    expect(positionsByName.get("Terry Pratchett")).toBe(1);
+    expect(positionsByName.get("Homer")).toBe(2);
+
+    // One select (all 3 names), one insert (all 3 are new), one bookAuthors
+    // insert: 3 statements total, not 3 * 3 = 9.
+    expect(state.authorSelectStatements).toBe(1);
+    expect(state.authorInsertStatements).toBe(1);
+    expect(state.bookAuthorsInsertStatements).toBe(1);
+    const totalAuthorStatements =
+      state.authorSelectStatements +
+      state.authorInsertStatements +
+      state.bookAuthorsInsertStatements;
+    expect(totalAuthorStatements).toBe(3);
+    expect(totalAuthorStatements).toBeLessThan(3 * 3);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+
+  it("adds no duplicate book_authors rows and skips the authors insert on a repeat persist", async () => {
+    vi.resetModules();
+
+    const { books, series, authors, bookAuthors } = await import("@/db/schema/catalog");
+    const { releases, releaseSources } = await import("@/db/schema/releases");
+    const { externalIds } = await import("@/db/schema/identity");
+
+    const deriveStatus = vi.fn(() => "ANNOUNCED");
+    vi.doMock("@/resolution/status", () => ({ deriveStatus }));
+
+    const state = makeSingleEntityState();
+    vi.doMock("@/db/client", () => ({
+      db: makeSingleEntityDbMock(
+        { books, series, releases, releaseSources, externalIds, authors, bookAuthors },
+        state,
+      ),
+    }));
+
+    const { persistResolvedBook } = await import("./persist");
+
+    const baseBook = {
+      key: "isbn:repeat-authors",
+      title: "Repeat Persist Book",
+      authors: ["Neil Gaiman", "Terry Pratchett", "Homer"],
+      provenance: {},
+      sources: [{ provider: "hardcover" as const, externalId: "hc-repeat-authors" }],
+      confidence: 90,
+    };
+
+    state.externalIdsQueue.push([]);
+    state.singleAuthorLookupQueue.push("Neil Gaiman", "Terry Pratchett", "Homer");
+    const first = await persistResolvedBook(baseBook);
+
+    state.externalIdsQueue.push([{ entityId: first.bookId }]);
+    state.singleAuthorLookupQueue.push("Neil Gaiman", "Terry Pratchett", "Homer");
+    const second = await persistResolvedBook(baseBook);
+
+    expect(second.bookId).toBe(first.bookId);
+    // Still exactly 3 rows: the repeat persist must not append duplicates.
+    expect(state.bookAuthorRows).toHaveLength(3);
+    // The names were already known from the first persist, so the second
+    // persist's authors insert is skipped entirely (only its select and its
+    // bookAuthors insert run).
+    expect(state.authorInsertStatements).toBe(1);
+    expect(state.authorSelectStatements).toBe(2);
+    expect(state.bookAuthorsInsertStatements).toBe(2);
+
+    vi.doUnmock("@/resolution/status");
+    vi.doUnmock("@/db/client");
+    vi.resetModules();
+  });
+});
 
 describe("persistResolvedBook status derivation", () => {
   it("computes sourceOfficial from provenance.releaseDate being hardcover, wikidata, or manual", async () => {
@@ -714,19 +933,21 @@ describe("persistResolvedBook status derivation", () => {
   it("derives ANNOUNCED, not RUMORED, for a manual entry with no release date", async () => {
     vi.resetModules();
 
-    const { books, releases } = await import("@/db/schema/catalog").then(
-      async (catalog) => ({
-        books: catalog.books,
-        releases: (await import("@/db/schema/releases")).releases,
-      }),
-    );
+    const { books, releases, authors, bookAuthors } = await import(
+      "@/db/schema/catalog"
+    ).then(async (catalog) => ({
+      books: catalog.books,
+      authors: catalog.authors,
+      bookAuthors: catalog.bookAuthors,
+      releases: (await import("@/db/schema/releases")).releases,
+    }));
 
     // deriveStatus itself is not mocked here: the point of this test is
     // that persistResolvedBook feeds it a sourceOfficial that is true for
     // a manual record, so the real status logic lands on ANNOUNCED rather
     // than RUMORED for a book with no date.
     const insertedReleases: { status: string }[] = [];
-    const dbMock = makeDbMock({ books, releases });
+    const dbMock = makeDbMock({ books, releases, authors, bookAuthors });
     const originalInsert = dbMock.insert;
     dbMock.insert = ((table: unknown) => {
       const chain = originalInsert(table);
@@ -767,12 +988,14 @@ describe("persistResolvedBook status derivation", () => {
   it("derives RUMORED for a book known only to Google Books and Open Library with no date", async () => {
     vi.resetModules();
 
-    const { books, releases } = await import("@/db/schema/catalog").then(
-      async (catalog) => ({
-        books: catalog.books,
-        releases: (await import("@/db/schema/releases")).releases,
-      }),
-    );
+    const { books, releases, authors, bookAuthors } = await import(
+      "@/db/schema/catalog"
+    ).then(async (catalog) => ({
+      books: catalog.books,
+      authors: catalog.authors,
+      bookAuthors: catalog.bookAuthors,
+      releases: (await import("@/db/schema/releases")).releases,
+    }));
 
     // deriveStatus itself is not mocked here: this is the counterpart to
     // the manual-entry test above. Google and Open Library are both
@@ -781,7 +1004,7 @@ describe("persistResolvedBook status derivation", () => {
     // sourceOfficial true unconditionally (which would make the manual
     // test above pass for the wrong reason).
     const insertedReleases: { status: string }[] = [];
-    const dbMock = makeDbMock({ books, releases });
+    const dbMock = makeDbMock({ books, releases, authors, bookAuthors });
     const originalInsert = dbMock.insert;
     dbMock.insert = ((table: unknown) => {
       const chain = originalInsert(table);
@@ -825,12 +1048,30 @@ describe("persistResolvedBook status derivation", () => {
 // persistResolvedBook's select/insert/returning chains, without touching the
 // live database. Identifies which table is being inserted into by reference
 // so it can hand back a plausible id for `books` vs `releases`.
-function makeDbMock(tables: { books: unknown; releases: unknown }) {
+function makeDbMock(tables: {
+  books: unknown;
+  releases: unknown;
+  authors?: unknown;
+  bookAuthors?: unknown;
+}) {
+  // where() is directly awaitable (not just `.limit()`-able): the authors
+  // upsert awaits `.where(inArray(...))` with no `.limit()` call, unlike
+  // every other lookup in this file. This mock has no cross-call state, so
+  // it always reports nothing existing yet, which is fine for the two
+  // status-derivation tests below that use it with a non-empty authors
+  // list: they only ever persist once, so "nothing exists yet" is accurate.
   const select = () => ({
     from: () => ({
-      where: () => ({
-        limit: async () => [],
-      }),
+      where: () => {
+        const resultPromise = Promise.resolve<unknown[]>([]);
+        return {
+          limit: async () => resultPromise,
+          then: (
+            onFulfilled: (value: unknown[]) => void,
+            onRejected?: (reason: unknown) => void,
+          ) => resultPromise.then(onFulfilled, onRejected),
+        };
+      },
     }),
   });
 
@@ -841,7 +1082,6 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
       // monkey-patch `values` after construction to read the row's `status`
       // field back out, with a signature that still matches this one.
       values: (rows: unknown) => {
-        void rows;
         return {
           __op: "insert" as const,
           __table: table,
@@ -849,6 +1089,12 @@ function makeDbMock(tables: { books: unknown; releases: unknown }) {
           returning: async () => {
             if (table === tables.books) return [{ id: "book-1" }];
             if (table === tables.releases) return [{ id: "release-1" }];
+            if (table === tables.authors) {
+              const inserted = (Array.isArray(rows) ? rows : [rows]) as {
+                name: string;
+              }[];
+              return inserted.map((row, i) => ({ id: `author-${i + 1}`, name: row.name }));
+            }
             return [{ id: "row-1" }];
           },
           onConflictDoNothing: async () => undefined,

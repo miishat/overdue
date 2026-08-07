@@ -1,4 +1,4 @@
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import type { DatePrecision, ProviderName } from "@/db/schema/enums";
 import { authors, bookAuthors, books, series } from "@/db/schema/catalog";
@@ -72,31 +72,64 @@ export function authorRows(names: string[]): AuthorRow[] {
     });
 }
 
+// Three statements total regardless of author count, replacing a former
+// per-author loop (select, conditional insert, bookAuthors insert; 3 * N
+// statements for N authors). authors.name has no unique constraint and no
+// index (confirmed empty uniqueConstraints/indexes for authors in both
+// src/db/schema/catalog.ts and drizzle/meta/0006_snapshot.json), so
+// onConflictDoNothing on authors would have no conflict target: adding one
+// is a schema change with migration implications and a real risk of
+// colliding with existing duplicate rows, out of scope here. That also
+// means this keeps the same check-then-insert race the original loop
+// already had: two concurrent persists can both see a name as missing and
+// both insert it, since nothing at the database level forbids a duplicate
+// authors.name. Not a regression introduced by batching; only a unique
+// constraint on authors.name would actually close it.
 async function upsertAuthors(bookId: string, names: string[]): Promise<void> {
   const rows = authorRows(names);
   if (rows.length === 0) return;
 
-  for (const row of rows) {
-    const existing = await db
-      .select({ id: authors.id })
-      .from(authors)
-      .where(eq(authors.name, row.name))
-      .limit(1);
+  const distinctNames = [...new Set(rows.map((row) => row.name))];
+  const existing = await db
+    .select({ id: authors.id, name: authors.name })
+    .from(authors)
+    .where(inArray(authors.name, distinctNames));
 
-    const authorId =
-      existing[0]?.id ??
-      (
-        await db
-          .insert(authors)
-          .values({ name: row.name, sortName: row.sortName })
-          .returning({ id: authors.id })
-      )[0].id;
+  const idByName = new Map(existing.map((row) => [row.name, row.id]));
 
-    await db
-      .insert(bookAuthors)
-      .values({ bookId, authorId, position: row.position })
-      .onConflictDoNothing();
+  // Dedupe by name (not just by row) before inserting: a name already
+  // missing on two `rows` entries (a book listing the same author twice)
+  // must still resolve to one author id, matching what the original
+  // select-then-insert-then-select loop did via read-after-write.
+  const missingByName = new Map(
+    rows.filter((row) => !idByName.has(row.name)).map((row) => [row.name, row]),
+  );
+
+  if (missingByName.size > 0) {
+    const inserted = await db
+      .insert(authors)
+      .values(
+        [...missingByName.values()].map((row) => ({
+          name: row.name,
+          sortName: row.sortName,
+        })),
+      )
+      .returning({ id: authors.id, name: authors.name });
+    for (const row of inserted) {
+      idByName.set(row.name, row.id);
+    }
   }
+
+  const joinRows: { bookId: string; authorId: string; position: number }[] = [];
+  for (const row of rows) {
+    const authorId = idByName.get(row.name);
+    if (authorId === undefined) {
+      throw new Error(`upsertAuthors: no author id resolved for "${row.name}"`);
+    }
+    joinRows.push({ bookId, authorId, position: row.position });
+  }
+
+  await db.insert(bookAuthors).values(joinRows).onConflictDoNothing();
 }
 
 export function externalIdRows(
