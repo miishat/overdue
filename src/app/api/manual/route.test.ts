@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ResolvedBook } from "@/resolution/resolve";
 
-const persistResolvedBook = vi.fn(async () => ({
+const persistResolvedBook = vi.fn<
+  (book: ResolvedBook) => Promise<{ bookId: string; seriesId: string | null }>
+>(async () => ({
   bookId: "book-1",
   seriesId: null,
 }));
@@ -44,10 +47,7 @@ describe("POST /api/manual", () => {
     });
 
     expect(res.status).toBe(201);
-    const passed = persistResolvedBook.mock.calls[0][0] as unknown as {
-      sources: { provider: string; sourceUrl?: string }[];
-      confidence: number;
-    };
+    const passed = persistResolvedBook.mock.calls[0][0];
     expect(passed.sources[0].provider).toBe("manual");
     expect(passed.confidence).toBe(100);
     expect(insertTrack).toHaveBeenCalledWith("u1", {
@@ -63,9 +63,7 @@ describe("POST /api/manual", () => {
       sourceUrl: "https://example.com/author-blog-june-2026",
     });
 
-    const passed = persistResolvedBook.mock.calls[0][0] as unknown as {
-      sources: { provider: string; sourceUrl?: string }[];
-    };
+    const passed = persistResolvedBook.mock.calls[0][0];
     expect(passed.sources[0].sourceUrl).toBe(
       "https://example.com/author-blog-june-2026",
     );
@@ -86,21 +84,13 @@ describe("POST /api/manual", () => {
     const res1 = await post({ title: "The Winds of Winter" });
     expect(res1.status).toBe(201);
 
-    const externalId1 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId1 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     persistResolvedBook.mockClear();
     const res2 = await post({ title: "The Winds of Winter" });
     expect(res2.status).toBe(201);
 
-    const externalId2 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId2 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     expect(externalId1).toBe(externalId2);
     expect(externalId1).toMatch(/^manual:/);
@@ -111,21 +101,13 @@ describe("POST /api/manual", () => {
     const res1 = await post({ title: "  The   Winds    of   Winter  " });
     expect(res1.status).toBe(201);
 
-    const externalId1 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId1 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     persistResolvedBook.mockClear();
     const res2 = await post({ title: "the winds of winter" });
     expect(res2.status).toBe(201);
 
-    const externalId2 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId2 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     expect(externalId1).toBe(externalId2);
   });
@@ -135,21 +117,13 @@ describe("POST /api/manual", () => {
     const res1 = await post({ title: "The Title", author: "Author A" });
     expect(res1.status).toBe(201);
 
-    const externalId1 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId1 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     persistResolvedBook.mockClear();
     const res2 = await post({ title: "The Title", author: "Author B" });
     expect(res2.status).toBe(201);
 
-    const externalId2 = (
-      persistResolvedBook.mock.calls[0][0] as unknown as {
-        sources: { externalId: string }[];
-      }
-    ).sources[0].externalId;
+    const externalId2 = persistResolvedBook.mock.calls[0][0].sources[0].externalId;
 
     expect(externalId1).not.toBe(externalId2);
   });
