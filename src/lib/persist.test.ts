@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ResolvedBook } from "@/resolution/resolve";
 
 // db/client.ts throws if DATABASE_URL is unset. neon() only builds a lazy
 // query function at construction time and does not connect, so setting a
@@ -959,7 +960,7 @@ describe("persistResolvedBook writes the resolved date belief", () => {
   async function persistWith(
     storedRelease: { date: string | null; datePrecision: string | null; confidence: number } | null,
     hasExistingBook: boolean,
-    book: Record<string, unknown>,
+    book: ResolvedBook,
   ) {
     vi.resetModules();
 
@@ -980,7 +981,7 @@ describe("persistResolvedBook writes the resolved date belief", () => {
     }));
 
     const { persistResolvedBook } = await import("./persist");
-    await persistResolvedBook(book as unknown as Parameters<typeof persistResolvedBook>[0]);
+    await persistResolvedBook(book);
 
     vi.doUnmock("@/resolution/status");
     vi.doUnmock("@/db/client");
