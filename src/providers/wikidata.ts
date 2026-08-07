@@ -11,10 +11,16 @@ const USER_AGENT = "Overdue/1.0 (book release tracker)";
 // below, so that query's VALUES clause never grows unbounded.
 const MAX_CANDIDATES = 20;
 
+// Wikidata precision codes: 11 = day, 10 = month, 9 = year, 8 = decade,
+// 7 = century. Only an explicit "11" claims day precision. Every other
+// value, including decade, century, and any absent or malformed code,
+// maps to "year", the coarsest value the enum offers. Bias runs toward
+// understatement, never toward a confidence no source gave us.
 export function precisionFromWikidata(raw: string | undefined): DatePrecision {
-  if (raw === "9") return "year";
+  if (raw === "11") return "day";
   if (raw === "10") return "month";
-  return "day";
+  if (raw === "9") return "year";
+  return "year";
 }
 
 function qidFromUri(uri: string): string {

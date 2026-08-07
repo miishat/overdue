@@ -1,3 +1,4 @@
+import type { DatePrecision } from "@/db/schema/enums";
 import type { MetadataProvider, ProviderBook, ProviderSeries } from "./types";
 import { asArray, asNumber, asRecord, asString, fetchJson } from "./http";
 
@@ -113,6 +114,35 @@ function toId(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+// Hardcover's API returns a bare date string with no precision field at all,
+// and it stores approximate future dates as January 1 of the target year.
+// Left unguarded, "sometime in 2027" arrives as "2027-01-01" and gets
+// rendered as a confirmed date nobody confirmed. Treat any bare January 1
+// date as year precision instead.
+//
+// Judgment call: this applies to any January 1 date, past or future, and
+// does not take the current time as an input. We cannot distinguish a year
+// placeholder from a genuine January 1 release, and the honest response to
+// that ambiguity is the lower confidence claim. The accepted cost is that a
+// book genuinely published on January 1 displays as just its year,
+// understating by a few weeks. The alternative asserts a date nobody
+// confirmed, which is the failure this app exists to prevent. Keeping this
+// function pure, with no "now" parameter, also keeps it trivially testable.
+// The shape check is not ceremony. release_date arrives through asString,
+// which guarantees a string and nothing about its form, so a bare "2027" or
+// a malformed value would slice to something that is not "01-01" and fall
+// through to a day claim: the exact bug this function exists to prevent,
+// reintroduced by the input we failed to look at. Anything that is not a
+// full YYYY-MM-DD gets year precision, for the same reason the January 1
+// case does.
+const FULL_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function precisionForHardcoverDate(date: string | undefined): DatePrecision | undefined {
+  if (!date) return undefined;
+  if (!FULL_DATE.test(date)) return "year";
+  return date.slice(5, 10) === "01-01" ? "year" : "day";
+}
+
 // Maps a Typesense "document" from the search endpoint's results.hits[] to
 // a ProviderBook. This is a different shape than the Hasura `books` row
 // used by getBook/getSeriesEntries (see toProviderBook below), so it gets
@@ -149,7 +179,7 @@ function toProviderBookFromSearchDocument(documentValue: unknown): ProviderBook 
     coverUrl: image ? asString(image.url) : undefined,
     description: asString(document.description),
     releaseDate,
-    datePrecision: releaseDate ? "day" : undefined,
+    datePrecision: precisionForHardcoverDate(releaseDate),
     sourceUrl: `https://hardcover.app/books/${id}`,
   };
 }
@@ -185,7 +215,7 @@ function toProviderBook(bookValue: unknown): ProviderBook | null {
     coverUrl: image ? asString(image.url) : undefined,
     description: asString(book.description),
     releaseDate,
-    datePrecision: releaseDate ? "day" : undefined,
+    datePrecision: precisionForHardcoverDate(releaseDate),
     sourceUrl: `https://hardcover.app/books/${id}`,
   };
 }

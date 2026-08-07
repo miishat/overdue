@@ -21,8 +21,17 @@ describe("precisionFromWikidata", () => {
     expect(precisionFromWikidata("9")).toBe("year");
   });
 
-  it("defaults to day when the precision is unknown", () => {
-    expect(precisionFromWikidata(undefined)).toBe("day");
+  it("defaults to year, the coarsest value, when the precision is missing", () => {
+    expect(precisionFromWikidata(undefined)).toBe("year");
+  });
+
+  it("defaults decade (8) and century (7) to year rather than day", () => {
+    expect(precisionFromWikidata("8")).toBe("year");
+    expect(precisionFromWikidata("7")).toBe("year");
+  });
+
+  it("defaults a malformed precision code to year", () => {
+    expect(precisionFromWikidata("not-a-code")).toBe("year");
   });
 });
 
