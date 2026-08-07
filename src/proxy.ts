@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { evaluateGate } from "@/lib/gate";
+import { evaluateGate, isGateSecretUnset } from "@/lib/gate";
 
 export const GATE_COOKIE_NAME = "overdue_gate";
 export const GATE_QUERY_PARAM = "gate";
@@ -29,7 +29,10 @@ let warnedMissingSecretInProduction = false;
 function warnIfSecretMissingInProduction(secret: string | undefined): void {
   if (warnedMissingSecretInProduction) return;
   if (process.env.NODE_ENV !== "production") return;
-  if (secret !== undefined && secret.trim() !== "") return;
+  // isGateSecretUnset (src/lib/gate.ts) is the one definition of "unset or
+  // blank", shared with evaluateGate's own check, so this warning cannot
+  // silently desync from the decision it is warning about.
+  if (!isGateSecretUnset(secret)) return;
 
   warnedMissingSecretInProduction = true;
   // Deliberately no secret value in this message: there is none to log in
