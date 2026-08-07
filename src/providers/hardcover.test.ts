@@ -96,7 +96,7 @@ describe("hardcoverProvider", () => {
     expect(entries[1].releaseDate).toBeUndefined();
   });
 
-  it("downgrades a bare January 1 release date to year precision", async () => {
+  it("downgrades a bare January 1 release date on series entries too", async () => {
     server.use(http.post(ENDPOINT, () => HttpResponse.json(entriesFixture)));
     const entries = await hardcoverProvider.getSeriesEntries("77");
 
@@ -105,6 +105,20 @@ describe("hardcoverProvider", () => {
       title: "Stormlight Archive, Book Seven",
       releaseDate: "2027-01-01",
       datePrecision: "year",
+    });
+  });
+
+  it("still reports day precision for an ordinary date on this call site", async () => {
+    // The year downgrade above and the pure function's own tests would both
+    // still pass if toProviderBook were wired to return "year" for every
+    // date. This pins the other branch at the same call site, so a hardcoded
+    // precision here cannot hide behind the Jan 1 case.
+    server.use(http.post(ENDPOINT, () => HttpResponse.json(entriesFixture)));
+    const entries = await hardcoverProvider.getSeriesEntries("77");
+
+    expect(entries[0]).toMatchObject({
+      releaseDate: "2010-08-31",
+      datePrecision: "day",
     });
   });
 

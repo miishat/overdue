@@ -1,15 +1,15 @@
 {
   "data": {
     "search": {
-      "ids": [12345],
+      "ids": [12345, 67890],
       "query": "way of kings",
       "query_type": "Book",
       "page": 1,
       "per_page": 20,
       "results": {
         "facet_counts": [],
-        "found": 1,
-        "out_of": 1,
+        "found": 2,
+        "out_of": 2,
         "page": 1,
         "search_time_ms": 5,
         "hits": [
